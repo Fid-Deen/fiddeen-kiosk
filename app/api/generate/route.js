@@ -1,4 +1,5 @@
 export const runtime = "nodejs"; // ensure Node runtime for Buffer/FormData
+export const dynamic = 'force-dynamic';
 
 import { NextResponse } from "next/server";
 

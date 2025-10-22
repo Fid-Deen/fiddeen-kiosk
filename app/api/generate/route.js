@@ -1,6 +1,8 @@
 export const runtime = "nodejs"; // ensure Node runtime for Buffer/FormData
 export const dynamic = 'force-dynamic';
 
+console.log("HAS_STABILITY_KEY?", Boolean(process.env.STABILITY_API_KEY));
+
 import { NextResponse } from "next/server";
 
 export async function POST(req) {

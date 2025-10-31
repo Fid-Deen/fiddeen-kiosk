@@ -17,13 +17,12 @@ export default function Page() {
   const [lang, setLang] = useState(LANGS[0]);
   const [theme, setTheme] = useState(THEMES[0]);
   const [bagColor, setBagColor] = useState("black"); // "black" | "beige"
-
   const [loading, setLoading] = useState(false);
   const [mockupUrl, setMockupUrl] = useState("");
   const [lastArtUrl, setLastArtUrl] = useState("");
   const canvasRef = useRef(null);
 
-  // ---------- Prompt builder ----------
+  // --- Prompt builder tuned for detailed Islamic tote art
   function buildPrompt() {
     const base =
       "highly detailed illustration for a tote bag print, professional product design";
@@ -48,7 +47,8 @@ export default function Page() {
           "gentle hillside of Jerusalem with olive trees and domes, Arabic word 'فلسطين' in tasteful calligraphy";
         break;
       case "Desert Sunset":
-        themeLine = "golden desert at sunset with palm trees, warm orange haze, prayer rug";
+        themeLine =
+          "golden desert at sunset with palm trees, warm orange haze, prayer rug";
         break;
       case "Calligraphy":
         themeLine =
@@ -61,88 +61,87 @@ export default function Page() {
     return `${base}. ${islamic}. ${nature}. ${style}. Theme: ${themeLine}. Primary name text: "${name}" in ${lang}.`;
   }
 
-  // Keep the generation very clean for print
-  const negative_prompt =
+  // Negative prompt to keep outputs clean for print
+  const negativePrompt =
     "distorted anatomy, extra fingers, text artifacts, logos, watermarks, frame, UI, low-res, blurry, noisy, jpeg artifacts, cut off, duplicate, deformed";
 
-  // ---------- Draw tote mockup onto a hidden canvas and export as image ----------
+  // Draws a realistic tote mockup (black or beige) and pastes the generated art
   async function drawMockup(artDataUrl) {
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
-    const W = 1000;
+    const W = 900;
     const H = 1200;
     canvas.width = W;
     canvas.height = H;
 
-    // Background (simple studio table look)
+    // Background – studio tabletop look
     ctx.fillStyle = "#e9e0d4";
     ctx.fillRect(0, 0, W, H);
 
-    // Helpers
-    function roundRect(c, x, y, w, h, r) {
+    // Helper: rounded rect
+    function roundRect(ctx, x, y, w, h, r) {
       const rr = Math.min(r, w / 2, h / 2);
-      c.beginPath();
-      c.moveTo(x + rr, y);
-      c.arcTo(x + w, y, x + w, y + rr, rr);
-      c.arcTo(x + w, y + h, x + w - rr, y + h, rr);
-      c.arcTo(x, y + h, x, y + h - rr, rr);
-      c.arcTo(x, y, x + rr, y, rr);
-      c.closePath();
+      ctx.beginPath();
+      ctx.moveTo(x + rr, y);
+      ctx.arcTo(x + w, y, x + w, y + h, rr);
+      ctx.arcTo(x + w, y + h, x, y + h, rr);
+      ctx.arcTo(x, y + h, x, y, rr);
+      ctx.arcTo(x, y, x + w, y, rr);
+      ctx.closePath();
     }
 
-    // Bag color & shadow
-    ctx.save();
-    ctx.shadowColor = "rgba(0,0,0,0.25)";
-    ctx.shadowBlur = 30;
-    ctx.shadowOffsetY = 25;
+    // Bag colors
+    const body = bagColor === "black" ? "#0e0e0f" : "#efe4d1";
+    const shadow = bagColor === "black" ? "rgba(0,0,0,0.35)" : "rgba(0,0,0,0.18)";
 
-    const body = bagColor === "black" ? "#0b0b0b" : "#efe4d1";
-    const bodyShadow = bagColor === "black" ? "rgba(0,0,0,0.35)" : "rgba(0,0,0,0.18)";
+    // Drop shadow for bag
+    ctx.save();
+    ctx.shadowColor = shadow;
+    ctx.shadowBlur = 40;
+    ctx.shadowOffsetY = 28;
 
     // Bag body
-    const bagX = 140;
-    const bagW = W - bagX * 2;
-    const bagY = 260;
-    const bagH = 820;
-
+    const bagX = 140,
+      bagY = 260,
+      bagW = W - 280,
+      bagH = H - 360;
+    roundRect(ctx, bagX, bagY, bagW, bagH, 26);
     ctx.fillStyle = body;
-    roundRect(ctx, bagX, bagY, bagW, bagH, 28);
     ctx.fill();
+
     ctx.restore();
 
     // Handles
-    function handlePath(c, x, y, w, h, thickness) {
+    function handlePath(x, y, w, h, thickness) {
       // outer strap
-      roundRect(c, x, y, w, h, w / 2);
-      c.fill();
-
+      roundRect(ctx, x, y, w, h, w / 2);
+      ctx.fill();
       // inner cutout
-      c.globalCompositeOperation = "destination-out";
-      roundRect(c, x + thickness, y + thickness, w - thickness * 2, h - thickness * 2, (w - thickness * 2) / 2);
-      c.fill();
-      c.globalCompositeOperation = "source-over";
+      ctx.globalCompositeOperation = "destination-out";
+      roundRect(ctx, x + thickness, y + thickness, w - thickness * 2, h - thickness * 2, (w - thickness * 2) / 2);
+      ctx.fill();
+      ctx.globalCompositeOperation = "source-over";
     }
 
     ctx.fillStyle = body;
     // left handle
-    handlePath(ctx, bagX + 70, 120, 180, 200, 44);
+    handlePath(bagX + 70, 120, 180, 200, 44);
     // right handle
-    handlePath(ctx, bagX + bagW - 250, 120, 180, 200, 44);
+    handlePath(bagX + bagW - 250, 120, 180, 200, 44);
 
     // Art panel (the “print” area)
     const margin = 60;
+    const panelX = bagX + margin;
+    const panelY = bagY + margin + 10;
     const panelW = bagW - margin * 2;
     const panelH = bagH - margin * 2 - 20;
-    const panelX = bagX + margin;
-    const panelY = bagY + margin + 20;
 
-    // white mat
+    // White mat + subtle inner shadow
     ctx.save();
-    ctx.fillStyle = bagColor === "black" ? "#0b0b0b" : "#fffef1";
+    ctx.fillStyle = bagColor === "black" ? "#0b0b0b" : "#f7efe1";
     roundRect(ctx, panelX - 14, panelY - 14, panelW + 28, panelH + 28, 20);
     ctx.fill();
 
-    // slight inner shadow
     ctx.shadowColor = "rgba(0,0,0,0.35)";
     ctx.shadowBlur = 24;
     ctx.shadowOffsetY = 16;
@@ -151,12 +150,22 @@ export default function Page() {
     ctx.fill();
     ctx.restore();
 
-    // ---------- Place generated art inside panel (letterbox cover) ----------
+    // Paste generated art inside panel (letterbox to fit)
     const art = await loadImage(artDataUrl);
     const fit = cover(art.width, art.height, panelW, panelH);
-    ctx.drawImage(art, fit.sx, fit.sy, fit.sw, fit.sh, panelX, panelY, panelW, panelH);
+    ctx.drawImage(
+      art,
+      fit.sx,
+      fit.sy,
+      fit.sw,
+      fit.sh,
+      panelX,
+      panelY,
+      panelW,
+      panelH
+    );
 
-    // Export
+    // Save data URL to show & download
     const url = canvas.toDataURL("image/png");
     setMockupUrl(url);
   }
@@ -165,14 +174,12 @@ export default function Page() {
   function loadImage(src) {
     return new Promise((res, rej) => {
       const img = new Image();
-      img.crossOrigin = "anonymous";
       img.onload = () => res(img);
       img.onerror = rej;
       img.src = src;
     });
   }
-
-  // Like CSS background-size: cover
+  // cover algorithm (like CSS background-size: cover)
   function cover(sw, sh, dw, dh) {
     const sRatio = sw / sh;
     const dRatio = dw / dh;
@@ -180,20 +187,20 @@ export default function Page() {
       sy = 0,
       sw2 = sw,
       sh2 = sh;
-
-    if (sRatio < dRatio) {
-      // source too tall -> crop top/bottom
-      sh2 = sw / dRatio;
-      sy = (sh - sh2) / 2;
-    } else {
-      // source too wide -> crop sides
+    if (sRatio > dRatio) {
+      // source too wide
+      sh2 = sh;
       sw2 = sh * dRatio;
       sx = (sw - sw2) / 2;
+    } else {
+      // source too tall
+      sw2 = sw;
+      sh2 = sw / dRatio;
+      sy = (sh - sh2) / 2;
     }
     return { sx, sy, sw: sw2, sh: sh2 };
   }
 
-  // ---------- Button handler ----------
   async function onGenerate() {
     setLoading(true);
     setMockupUrl("");
@@ -203,21 +210,15 @@ export default function Page() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           prompt: buildPrompt(),
-          negative_prompt,
+          negative_prompt: negativePrompt,
+          // model & options understood by your existing /api/generate (Stability)
           model: "sd3.5-large",
           output_format: "png",
           style_preset: "cinematic",
           cfg_scale: 4,
           aspect_ratio: "1:1",
-      
-          // add these from your state
-          name,
-          theme,
-          color: bagColor,  // "black" or "beige"
-          lang,
         }),
       });
-      
 
       if (!res.ok) {
         const txt = await res.text();
@@ -226,18 +227,15 @@ export default function Page() {
         return;
       }
 
-      // Expecting { images: ["data:image/png;base64,..."], s3Url: "https://..." }
+      // Expecting { images: ["data:image/png;base64,..."] }
       const data = await res.json();
-      const artDataUrl = data.images?.[0];
+      const artDataUrl = data?.images?.[0];
       if (!artDataUrl) {
         alert("No image returned from /api/generate.");
         setLoading(false);
         return;
       }
-
-      // Keep S3 URL for the “download art only” link
-      if (data.s3Url) setLastArtUrl(data.s3Url);
-
+      setLastArtUrl(artDataUrl);
       await drawMockup(artDataUrl);
     } catch (e) {
       console.error(e);
@@ -249,7 +247,9 @@ export default function Page() {
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-12">
-      <h1 className="text-4xl font-semibold tracking-tight mb-8">FidDeen Tote Generator</h1>
+      <h1 className="text-4xl font-semibold tracking-tight mb-8">
+        FidDeen Tote Generator
+      </h1>
 
       <div className="space-y-4 mb-6">
         <input
@@ -264,9 +264,9 @@ export default function Page() {
           value={lang}
           onChange={(e) => setLang(e.target.value)}
         >
-          {LANGS.map((t) => (
-            <option key={t} value={t}>
-              {t}
+          {LANGS.map((l) => (
+            <option key={l} value={l}>
+              {l}
             </option>
           ))}
         </select>
@@ -310,7 +310,7 @@ export default function Page() {
           disabled={loading}
           className="rounded-md bg-black text-white px-5 py-3 hover:bg-gray-900 disabled:opacity-60"
         >
-          {loading ? "Generating..." : "Generate Design"}
+          {loading ? "Generating…" : "Generate Design"}
         </button>
       </div>
 
@@ -319,8 +319,11 @@ export default function Page() {
 
       {mockupUrl && (
         <div className="mt-8 space-y-3">
-          <img src={mockupUrl} alt="Tote mockup" className="w-full rounded-lg shadow-lg" />
-
+          <img
+            src={mockupUrl}
+            alt="Tote mockup"
+            className="w-full rounded-lg shadow-lg"
+          />
           <div className="flex gap-3">
             <a
               href={mockupUrl}
@@ -329,12 +332,10 @@ export default function Page() {
             >
               Download mockup
             </a>
-
             {lastArtUrl && (
               <a
                 href={lastArtUrl}
-                target="_blank"
-                rel="noreferrer"
+                download={`art-${Date.now()}.png`}
                 className="rounded-md border px-4 py-2"
               >
                 Download art only

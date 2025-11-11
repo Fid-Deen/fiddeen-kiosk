@@ -1,348 +1,496 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
-const LANGS = ["English", "Arabic", "Urdu", "Turkish", "Indonesian"];
+/* ---------- UI choices ---------- */
 const THEMES = [
-  "Spiritual",
-  "Mosque Night",
-  "Nature Serenity",
-  "Palestine",
-  "Desert Sunset",
-  "Calligraphy",
+  { value: "traditional", label: "Traditional Islamic" },
+  { value: "geometric", label: "Geometric Arabesque" },
+  { value: "floral", label: "Floral Illumination" },
+  { value: "nature", label: "Nature & Serenity" },
+  { value: "calligraphic", label: "Calligraphic Ornament" },
+  { value: "minimal", label: "Minimalist Abstract" },
 ];
 
+const COUNTRIES = [
+  { value: "morocco", label: "Morocco" },
+  { value: "egypt", label: "Egypt" },
+  { value: "turkey", label: "Turkey (Anatolia)" },
+  { value: "iran", label: "Iran (Persia)" },
+  { value: "pakistan", label: "Pakistan (Mughal)" },
+  { value: "saudi", label: "Saudi / Hejaz" },
+  { value: "uae", label: "UAE" },
+  { value: "jordan", label: "Jordan / Levant" },
+  { value: "palestine", label: "Palestine" },
+  { value: "indonesia", label: "Indonesia" },
+];
+
+const BAG_COLORS = [
+  { value: "beige", label: "Beige" },
+  { value: "black", label: "Black" },
+];
+
+const BAG_TYPES = [
+  { value: "regular", label: "Regular" },
+  { value: "zipper", label: "Zipper" },
+];
+
+/* ---------- Page ---------- */
 export default function Page() {
-  const [name, setName] = useState("Bilal Khan");
-  const [lang, setLang] = useState(LANGS[0]);
-  const [theme, setTheme] = useState(THEMES[0]);
-  const [bagColor, setBagColor] = useState("black"); // "black" | "beige"
+  /* form */
+  const [name, setName] = useState("");
+  const [country, setCountry] = useState("turkey");
+  const [theme, setTheme] = useState("traditional");
+  const [bagColor, setBagColor] = useState("beige");
+  const [bagType, setBagType] = useState("regular");
 
-  const [loading, setLoading] = useState(false);
-  const [mockupUrl, setMockupUrl] = useState("");
-  const [lastArtUrl, setLastArtUrl] = useState("");
-  const canvasRef = useRef(null);
+  /* generation */
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState("");
 
-  // ---------- Prompt builder ----------
-  function buildPrompt() {
-    const base =
-      "highly detailed illustration for a tote bag print, professional product design";
-    const islamic =
-      "islamic art, elegant arabesque motifs, crescent moon, domes, minarets, patterned tiles, warm cinematic lighting, volumetric light rays";
-    const nature =
-      "lush gardens, date palms, water reflection, moonlit sky, soft bokeh, painterly yet crisp";
-    const style =
-      "studio quality, SDXL-level detail, rich textures, fine brushwork, realistic fabric print edges, no frame, no watermark";
+  /* choose */
+  const [previews, setPreviews] = useState([]); // data URLs
+  const [chosenIndex, setChosenIndex] = useState(null);
+  const [isChoosing, setIsChoosing] = useState(false);
 
-    let themeLine = "";
-    switch (theme) {
-      case "Mosque Night":
-        themeLine =
-          "grand mosque courtyard at night, golden light from the gate, full moon, reflective pool";
-        break;
-      case "Nature Serenity":
-        themeLine = "quiet forest clearing with light rays, prayer rug in foreground";
-        break;
-      case "Palestine":
-        themeLine =
-          "gentle hillside of Jerusalem with olive trees and domes, Arabic word 'فلسطين' in tasteful calligraphy";
-        break;
-      case "Desert Sunset":
-        themeLine = "golden desert at sunset with palm trees, warm orange haze, prayer rug";
-        break;
-      case "Calligraphy":
-        themeLine =
-          "beautiful Arabic calligraphy of the name, intertwined with geometric star patterns";
-        break;
-      default:
-        themeLine = "calm devotional scene with mosque, garden, and moonlight";
-    }
+  /* result */
+  const [s3Url, setS3Url] = useState("");
+  const [jobId, setJobId] = useState("");
 
-    return `${base}. ${islamic}. ${nature}. ${style}. Theme: ${themeLine}. Primary name text: "${name}" in ${lang}.`;
-  }
+  const canGenerate = useMemo(
+    () => !isGenerating && !isChoosing && previews.length === 0 && !s3Url,
+    [isGenerating, isChoosing, previews.length, s3Url]
+  );
 
-  // Keep the generation very clean for print
-  const negative_prompt =
-    "distorted anatomy, extra fingers, text artifacts, logos, watermarks, frame, UI, low-res, blurry, noisy, jpeg artifacts, cut off, duplicate, deformed";
+  const canChoose = useMemo(
+    () =>
+      previews.length > 0 &&
+      chosenIndex !== null &&
+      !isChoosing &&
+      !s3Url &&
+      !isGenerating,
+    [previews.length, chosenIndex, isChoosing, s3Url, isGenerating]
+  );
 
-  // ---------- Draw tote mockup onto a hidden canvas and export as image ----------
-  async function drawMockup(artDataUrl) {
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-    const W = 1000;
-    const H = 1200;
-    canvas.width = W;
-    canvas.height = H;
+  const resetAll = useCallback(() => {
+    setIsGenerating(false);
+    setIsChoosing(false);
+    setGenerateError("");
+    setPreviews([]);
+    setChosenIndex(null);
+    setS3Url("");
+    setJobId("");
+  }, []);
 
-    // Background (simple studio table look)
-    ctx.fillStyle = "#e9e0d4";
-    ctx.fillRect(0, 0, W, H);
+  /* ---------- handlers ---------- */
+  async function handleGenerate(e) {
+    e.preventDefault();
+    if (!canGenerate) return;
+    setIsGenerating(true);
+    setGenerateError("");
 
-    // Helpers
-    function roundRect(c, x, y, w, h, r) {
-      const rr = Math.min(r, w / 2, h / 2);
-      c.beginPath();
-      c.moveTo(x + rr, y);
-      c.arcTo(x + w, y, x + w, y + rr, rr);
-      c.arcTo(x + w, y + h, x + w - rr, y + h, rr);
-      c.arcTo(x, y + h, x, y + h - rr, rr);
-      c.arcTo(x, y, x + rr, y, rr);
-      c.closePath();
-    }
-
-    // Bag color & shadow
-    ctx.save();
-    ctx.shadowColor = "rgba(0,0,0,0.25)";
-    ctx.shadowBlur = 30;
-    ctx.shadowOffsetY = 25;
-
-    const body = bagColor === "black" ? "#0b0b0b" : "#efe4d1";
-    const bodyShadow = bagColor === "black" ? "rgba(0,0,0,0.35)" : "rgba(0,0,0,0.18)";
-
-    // Bag body
-    const bagX = 140;
-    const bagW = W - bagX * 2;
-    const bagY = 260;
-    const bagH = 820;
-
-    ctx.fillStyle = body;
-    roundRect(ctx, bagX, bagY, bagW, bagH, 28);
-    ctx.fill();
-    ctx.restore();
-
-    // Handles
-    function handlePath(c, x, y, w, h, thickness) {
-      // outer strap
-      roundRect(c, x, y, w, h, w / 2);
-      c.fill();
-
-      // inner cutout
-      c.globalCompositeOperation = "destination-out";
-      roundRect(c, x + thickness, y + thickness, w - thickness * 2, h - thickness * 2, (w - thickness * 2) / 2);
-      c.fill();
-      c.globalCompositeOperation = "source-over";
-    }
-
-    ctx.fillStyle = body;
-    // left handle
-    handlePath(ctx, bagX + 70, 120, 180, 200, 44);
-    // right handle
-    handlePath(ctx, bagX + bagW - 250, 120, 180, 200, 44);
-
-    // Art panel (the “print” area)
-    const margin = 60;
-    const panelW = bagW - margin * 2;
-    const panelH = bagH - margin * 2 - 20;
-    const panelX = bagX + margin;
-    const panelY = bagY + margin + 20;
-
-    // white mat
-    ctx.save();
-    ctx.fillStyle = bagColor === "black" ? "#0b0b0b" : "#fffef1";
-    roundRect(ctx, panelX - 14, panelY - 14, panelW + 28, panelH + 28, 20);
-    ctx.fill();
-
-    // slight inner shadow
-    ctx.shadowColor = "rgba(0,0,0,0.35)";
-    ctx.shadowBlur = 24;
-    ctx.shadowOffsetY = 16;
-    ctx.fillStyle = "#ffffff";
-    roundRect(ctx, panelX, panelY, panelW, panelH, 16);
-    ctx.fill();
-    ctx.restore();
-
-    // ---------- Place generated art inside panel (letterbox cover) ----------
-    const art = await loadImage(artDataUrl);
-    const fit = cover(art.width, art.height, panelW, panelH);
-    ctx.drawImage(art, fit.sx, fit.sy, fit.sw, fit.sh, panelX, panelY, panelW, panelH);
-
-    // Export
-    const url = canvas.toDataURL("image/png");
-    setMockupUrl(url);
-  }
-
-  // Utilities
-  function loadImage(src) {
-    return new Promise((res, rej) => {
-      const img = new Image();
-      img.crossOrigin = "anonymous";
-      img.onload = () => res(img);
-      img.onerror = rej;
-      img.src = src;
-    });
-  }
-
-  // Like CSS background-size: cover
-  function cover(sw, sh, dw, dh) {
-    const sRatio = sw / sh;
-    const dRatio = dw / dh;
-    let sx = 0,
-      sy = 0,
-      sw2 = sw,
-      sh2 = sh;
-
-    if (sRatio < dRatio) {
-      // source too tall -> crop top/bottom
-      sh2 = sw / dRatio;
-      sy = (sh - sh2) / 2;
-    } else {
-      // source too wide -> crop sides
-      sw2 = sh * dRatio;
-      sx = (sw - sw2) / 2;
-    }
-    return { sx, sy, sw: sw2, sh: sh2 };
-  }
-
-  // ---------- Button handler ----------
-  async function onGenerate() {
-    setLoading(true);
-    setMockupUrl("");
     try {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          prompt: buildPrompt(),
-          negative_prompt,
-          model: "sd3.5-large",
-          output_format: "png",
-          style_preset: "cinematic",
-          cfg_scale: 4,
-          aspect_ratio: "1:1",
-      
-          // add these from your state
-          name,
+          // Name is strictly for order labeling later (NOT in the prompt)
+          name: name.trim(),
+          country,
           theme,
-          color: bagColor,  // "black" or "beige"
-          lang,
+          previewCount: 3,
+          deferUpload: true,
         }),
       });
-      
 
       if (!res.ok) {
         const txt = await res.text();
-        alert(`Generation failed: ${res.status}\n${txt}`);
-        setLoading(false);
-        return;
+        throw new Error(txt || "Failed to generate previews");
       }
-
-      // Expecting { images: ["data:image/png;base64,..."], s3Url: "https://..." }
       const data = await res.json();
-      const artDataUrl = data.images?.[0];
-      if (!artDataUrl) {
-        alert("No image returned from /api/generate.");
-        setLoading(false);
-        return;
-      }
+      if (!data?.images?.length) throw new Error("No previews returned");
 
-      // Keep S3 URL for the “download art only” link
-      if (data.s3Url) setLastArtUrl(data.s3Url);
-
-      await drawMockup(artDataUrl);
-    } catch (e) {
-      console.error(e);
-      alert("Something went wrong generating the image.");
+      setPreviews(data.images.slice(0, 3));
+      setJobId(data.jobId || "");
+    } catch (err) {
+      setGenerateError(`Issue: ${err.message || String(err)}`);
     } finally {
-      setLoading(false);
+      setIsGenerating(false);
     }
   }
 
+  async function handleChoose() {
+    if (!canChoose) return;
+    setIsChoosing(true);
+    setGenerateError("");
+
+    try {
+      const imageDataUrl = previews[chosenIndex];
+
+      const res = await fetch("/api/generate/choose", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imageDataUrl,
+          meta: {
+            // These are saved with the render for staff reference only
+            name: name.trim(),
+            country,
+            theme,
+            bagColor,
+            bagType,
+          },
+        }),
+      });
+
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(txt || "Upload failed");
+      }
+      const data = await res.json();
+      setS3Url(data.s3Url || "");
+      setJobId(data.orderId || jobId || "");
+    } catch (err) {
+      setGenerateError(`Issue: ${err.message || String(err)}`);
+    } finally {
+      setIsChoosing(false);
+    }
+  }
+
+  /* ---------- styles ---------- */
+  const pageBg = {
+    background:
+      "linear-gradient(180deg, rgba(244,247,250,1) 0%, rgba(250,251,253,1) 60%)",
+    minHeight: "100vh",
+  };
+
+  const shell = {
+    maxWidth: 1200,
+    margin: "0 auto",
+    padding: "40px 20px 80px",
+    color: "#1b1f24",
+  };
+
+  const card = {
+    background: "#ffffff",
+    border: "1px solid #e9eef5",
+    borderRadius: 16,
+    boxShadow: "0 1px 2px rgba(16,24,40,0.04)",
+  };
+
+  const label = { fontWeight: 600, marginBottom: 8, display: "block" };
+
+  const input = {
+    width: "100%",
+    padding: "12px 14px",
+    borderRadius: 12,
+    border: "1px solid #d4dbe6",
+    background: "#fff",
+    fontSize: 16,
+    color: "#131722",
+    outline: "none",
+  };
+
+  const select = { ...input, appearance: "none", backgroundClip: "padding-box" };
+
+  const primaryBtn = (enabled = true) => ({
+    background: enabled
+      ? "linear-gradient(135deg,#121a26 0%,#1f2937 100%)"
+      : "#b9c2d0",
+    color: "#fff",
+    padding: "14px 18px",
+    borderRadius: 12,
+    border: "none",
+    fontSize: 16,
+    fontWeight: 700,
+    cursor: enabled ? "pointer" : "not-allowed",
+    boxShadow: enabled ? "0 6px 14px rgba(17,24,39,0.20)" : "none",
+  });
+
+  const secondaryBtn = {
+    background: "#fff",
+    color: "#1b1f24",
+    padding: "14px 18px",
+    borderRadius: 12,
+    border: "1px solid #d4dbe6",
+    fontSize: 16,
+    fontWeight: 600,
+    cursor: "pointer",
+  };
+
+  /* ---------- UI ---------- */
   return (
-    <main className="mx-auto max-w-3xl px-6 py-12">
-      <h1 className="text-4xl font-semibold tracking-tight mb-8">FidDeen Tote Generator</h1>
+    <div style={pageBg}>
+      <div style={shell}>
+        <header style={{ marginBottom: 18 }}>
+          <h1 style={{ fontSize: 36, fontWeight: 800, margin: 0 }}>
+            Fid Deen Custom Tote Generator
+          </h1>
+          <p style={{ marginTop: 8, color: "#4a5568" }}>
+            Fill the form, generate 3 options, and choose your favorite.
+          </p>
+        </header>
 
-      <div className="space-y-4 mb-6">
-        <input
-          className="w-full rounded-md border px-4 py-3"
-          placeholder="Name for the tote (used in calligraphy)"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
+        {/* FORM CARD */}
+        <form onSubmit={handleGenerate} style={{ ...card, padding: 20 }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1.5fr 1fr 1fr",
+              gap: 16,
+              marginBottom: 14,
+            }}
+          >
+            <div>
+              <label style={label}>Name (optional, for order label)</label>
+              <input
+                style={input}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="e.g., Bilal"
+              />
+            </div>
 
-        <select
-          className="w-full rounded-md border px-4 py-3"
-          value={lang}
-          onChange={(e) => setLang(e.target.value)}
-        >
-          {LANGS.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
+            <div>
+              <label style={label}>Country</label>
+              <select
+                style={select}
+                value={country}
+                onChange={(e) => setCountry(e.target.value)}
+              >
+                {COUNTRIES.map((c) => (
+                  <option key={c.value} value={c.value}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-        <select
-          className="w-full rounded-md border px-4 py-3"
-          value={theme}
-          onChange={(e) => setTheme(e.target.value)}
-        >
-          {THEMES.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
+            <div>
+              <label style={label}>Theme</label>
+              <select
+                style={select}
+                value={theme}
+                onChange={(e) => setTheme(e.target.value)}
+              >
+                {THEMES.map((t) => (
+                  <option key={t.value} value={t.value}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
 
-        <div className="flex gap-3 items-center">
-          <span className="text-sm text-gray-600">Tote color:</span>
-          <label className="flex items-center gap-2">
-            <input
-              type="radio"
-              name="bag"
-              checked={bagColor === "black"}
-              onChange={() => setBagColor("black")}
-            />
-            <span>Black</span>
-          </label>
-          <label className="flex items-center gap-2">
-            <input
-              type="radio"
-              name="bag"
-              checked={bagColor === "beige"}
-              onChange={() => setBagColor("beige")}
-            />
-            <span>Beige</span>
-          </label>
-        </div>
+          {/* Tote options (do NOT affect design prompt; only saved with meta) */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 16,
+              marginBottom: 6,
+            }}
+          >
+            <div>
+              <label style={label}>Tote Bag Color</label>
+              <select
+                style={select}
+                value={bagColor}
+                onChange={(e) => setBagColor(e.target.value)}
+              >
+                {BAG_COLORS.map((b) => (
+                  <option key={b.value} value={b.value}>
+                    {b.label}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-        <button
-          onClick={onGenerate}
-          disabled={loading}
-          className="rounded-md bg-black text-white px-5 py-3 hover:bg-gray-900 disabled:opacity-60"
-        >
-          {loading ? "Generating..." : "Generate Design"}
-        </button>
-      </div>
+            <div>
+              <label style={label}>Tote Bag Type</label>
+              <select
+                style={select}
+                value={bagType}
+                onChange={(e) => setBagType(e.target.value)}
+              >
+                {BAG_TYPES.map((b) => (
+                  <option key={b.value} value={b.value}>
+                    {b.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
 
-      {/* Hidden canvas used to build the mockup */}
-      <canvas ref={canvasRef} className="hidden" />
+          <div style={{ display: "flex", gap: 12, marginTop: 10 }}>
+            <button type="submit" style={primaryBtn(canGenerate)} disabled={!canGenerate}>
+              {isGenerating ? "Generating…" : "Generate 3 Options"}
+            </button>
+            <button type="button" onClick={resetAll} style={secondaryBtn}>
+              Reset
+            </button>
+          </div>
 
-      {mockupUrl && (
-        <div className="mt-8 space-y-3">
-          <img src={mockupUrl} alt="Tote mockup" className="w-full rounded-lg shadow-lg" />
-
-          <div className="flex gap-3">
-            <a
-              href={mockupUrl}
-              download={`fiddeen-tote-${Date.now()}.png`}
-              className="rounded-md border px-4 py-2"
+          {generateError && (
+            <div
+              style={{
+                marginTop: 12,
+                color: "#b00020",
+                fontSize: 14,
+                background: "#fff6f6",
+                border: "1px solid #ffe0e0",
+                padding: "10px 12px",
+                borderRadius: 10,
+              }}
             >
-              Download mockup
-            </a>
+              {generateError}
+            </div>
+          )}
+        </form>
 
-            {lastArtUrl && (
+        {/* PREVIEWS */}
+        {previews.length > 0 && !s3Url && (
+          <section style={{ ...card, padding: 20, marginTop: 18 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "baseline",
+                marginBottom: 12,
+              }}
+            >
+              <h2 style={{ margin: 0, fontSize: 22 }}>Pick your favorite</h2>
+              <div style={{ color: "#6b7280", fontSize: 14 }}>
+                Click a card to select
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(3, 1fr)",
+                gap: 20,
+              }}
+            >
+              {previews.map((src, i) => {
+                const active = chosenIndex === i;
+                return (
+                  <div
+                    key={i}
+                    onClick={() => setChosenIndex(i)}
+                    style={{
+                      border: active ? "3px solid #0f172a" : "1px solid #e2e8f0",
+                      borderRadius: 16,
+                      padding: 12,
+                      background: "#fff",
+                      cursor: "pointer",
+                      transition: "transform 120ms ease, box-shadow 120ms ease",
+                      boxShadow: active
+                        ? "0 10px 18px rgba(15,23,42,0.18)"
+                        : "0 2px 8px rgba(17,24,39,0.06)",
+                      transform: active ? "translateY(-3px)" : "none",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: "100%",
+                        aspectRatio: "1/1",
+                        borderRadius: 12,
+                        overflow: "hidden",
+                        background: "#f4f6f9",
+                      }}
+                    >
+                      <img
+                        src={src}
+                        alt={`Option ${i + 1}`}
+                        style={{
+                          width: "100%",
+                          height: "100%",
+                          objectFit: "cover",
+                          display: "block",
+                        }}
+                      />
+                    </div>
+                    <div
+                      style={{
+                        paddingTop: 10,
+                        textAlign: "center",
+                        fontWeight: 700,
+                        color: "#111827",
+                      }}
+                    >
+                      {`Option ${["A", "B", "C"][i]}`}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div style={{ display: "flex", gap: 12, marginTop: 16 }}>
+              <button
+                type="button"
+                onClick={handleChoose}
+                disabled={!canChoose}
+                style={primaryBtn(canChoose)}
+              >
+                {isChoosing ? "Saving…" : "Choose This Design"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setChosenIndex(null)}
+                style={secondaryBtn}
+              >
+                Unselect
+              </button>
+            </div>
+          </section>
+        )}
+
+        {/* RESULT */}
+        {s3Url && (
+          <section style={{ ...card, padding: 20, marginTop: 18 }}>
+            <h3 style={{ marginTop: 0 }}>Ready to Print</h3>
+            <p style={{ margin: "6px 0" }}>
+              Order ID: <strong>{jobId || "—"}</strong>
+            </p>
+            <p style={{ margin: "6px 0" }}>
+              File: <code>{new URL(s3Url).pathname.slice(1)}</code>
+            </p>
+
+            {/* show tote meta for staff clarity */}
+            <div
+              style={{
+                marginTop: 8,
+                background: "#f7fafc",
+                border: "1px solid #e2e8f0",
+                borderRadius: 10,
+                padding: "10px 12px",
+                color: "#374151",
+              }}
+            >
+              <strong>Tote Options:</strong> Color – {bagColor}, Type – {bagType}
+            </div>
+
+            <div style={{ display: "flex", gap: 12, marginTop: 12 }}>
               <a
-                href={lastArtUrl}
+                href={s3Url}
                 target="_blank"
                 rel="noreferrer"
-                className="rounded-md border px-4 py-2"
+                style={{
+                  ...primaryBtn(true),
+                  textDecoration: "none",
+                  display: "inline-block",
+                }}
               >
-                Download art only
+                Open Image
               </a>
-            )}
-          </div>
-        </div>
-      )}
-    </main>
+              <button type="button" onClick={resetAll} style={secondaryBtn}>
+                New Tote
+              </button>
+            </div>
+          </section>
+        )}
+      </div>
+    </div>
   );
 }

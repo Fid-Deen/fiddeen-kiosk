@@ -4,15 +4,14 @@ import { useCallback, useMemo, useState } from "react";
 
 /* ---------- UI choices ---------- */
 const THEMES = [
-  { value: "traditional", label: "Traditional Islamic" },
-  { value: "geometric", label: "Geometric Arabesque" },
-  { value: "floral", label: "Floral Illumination" },
-  { value: "nature", label: "Nature & Serenity" },
-  { value: "calligraphic", label: "Calligraphic Ornament" },
-  { value: "minimal", label: "Minimalist Abstract" },
+  { value: "peaceful", label: "Peaceful" },
+  { value: "islamic", label: "Islamic" },
+  { value: "nature", label: "Nature" },
+  { value: "city_vibrant", label: "City / Vibrant" },
 ];
 
 const COUNTRIES = [
+  { value: "", label: "— No country (skip) —" }, // optional
   { value: "morocco", label: "Morocco" },
   { value: "egypt", label: "Egypt" },
   { value: "turkey", label: "Turkey (Anatolia)" },
@@ -23,6 +22,11 @@ const COUNTRIES = [
   { value: "jordan", label: "Jordan / Levant" },
   { value: "palestine", label: "Palestine" },
   { value: "indonesia", label: "Indonesia" },
+];
+
+const TIME_OF_DAY = [
+  { value: "daytime", label: "Daytime" },
+  { value: "nighttime", label: "Nighttime" },
 ];
 
 const BAG_COLORS = [
@@ -38,11 +42,12 @@ const BAG_TYPES = [
 /* ---------- Page ---------- */
 export default function Page() {
   /* form */
-  const [name, setName] = useState("");
-  const [country, setCountry] = useState("turkey");
-  const [theme, setTheme] = useState("traditional");
-  const [bagColor, setBagColor] = useState("beige");
-  const [bagType, setBagType] = useState("regular");
+  const [name, setName] = useState("");                 // required
+  const [country, setCountry] = useState("");           // optional
+  const [theme, setTheme] = useState("");               // required
+  const [timeOfDay, setTimeOfDay] = useState("");       // required
+  const [bagColor, setBagColor] = useState("beige");    // meta only
+  const [bagType, setBagType] = useState("regular");    // meta only
 
   /* generation */
   const [isGenerating, setIsGenerating] = useState(false);
@@ -57,9 +62,13 @@ export default function Page() {
   const [s3Url, setS3Url] = useState("");
   const [jobId, setJobId] = useState("");
 
+  const hasRequired = useMemo(() => {
+    return name.trim().length > 0 && timeOfDay;
+  }, [name, timeOfDay]);
+
   const canGenerate = useMemo(
-    () => !isGenerating && !isChoosing && previews.length === 0 && !s3Url,
-    [isGenerating, isChoosing, previews.length, s3Url]
+    () => hasRequired && !isGenerating && !isChoosing && previews.length === 0 && !s3Url,
+    [hasRequired, isGenerating, isChoosing, previews.length, s3Url]
   );
 
   const canChoose = useMemo(
@@ -80,12 +89,18 @@ export default function Page() {
     setChosenIndex(null);
     setS3Url("");
     setJobId("");
+    // keep the form values so the user can tweak and try again
   }, []);
 
   /* ---------- handlers ---------- */
   async function handleGenerate(e) {
     e.preventDefault();
-    if (!canGenerate) return;
+    if (!canGenerate) {
+      if (!hasRequired) {
+        setGenerateError("Please fill Name and Time of Day before generating.");
+      }
+      return;
+    }
     setIsGenerating(true);
     setGenerateError("");
 
@@ -94,10 +109,11 @@ export default function Page() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          // Name is strictly for order labeling later (NOT in the prompt)
+          // Name is strictly for order labeling later (NOT embedded in the image)
           name: name.trim(),
-          country,
-          theme,
+          country: country || undefined, // optional
+          theme: theme || undefined,     // optional now
+          timeOfDay,                     // "daytime" | "nighttime"
           previewCount: 3,
           deferUpload: true,
         }),
@@ -133,10 +149,11 @@ export default function Page() {
         body: JSON.stringify({
           imageDataUrl,
           meta: {
-            // These are saved with the render for staff reference only
+            // Saved with the render for staff reference only
             name: name.trim(),
             country,
             theme,
+            timeOfDay,
             bagColor,
             bagType,
           },
@@ -179,6 +196,10 @@ export default function Page() {
   };
 
   const label = { fontWeight: 600, marginBottom: 8, display: "block" };
+
+  const reqBadge = (
+    <span style={{ fontWeight: 600, color: "#b00020", marginLeft: 6 }}>*</span>
+  );
 
   const input = {
     width: "100%",
@@ -236,13 +257,15 @@ export default function Page() {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "1.5fr 1fr 1fr",
+              gridTemplateColumns: "1.4fr 1fr 1fr",
               gap: 16,
               marginBottom: 14,
             }}
           >
             <div>
-              <label style={label}>Name (optional, for order label)</label>
+              <label style={label}>
+                Name (for order label){reqBadge}
+              </label>
               <input
                 style={input}
                 value={name}
@@ -259,7 +282,7 @@ export default function Page() {
                 onChange={(e) => setCountry(e.target.value)}
               >
                 {COUNTRIES.map((c) => (
-                  <option key={c.value} value={c.value}>
+                  <option key={c.value || "none"} value={c.value}>
                     {c.label}
                   </option>
                 ))}
@@ -267,12 +290,13 @@ export default function Page() {
             </div>
 
             <div>
-              <label style={label}>Theme</label>
+              <label style={label}>Theme (optional)</label>
               <select
                 style={select}
                 value={theme}
                 onChange={(e) => setTheme(e.target.value)}
               >
+                <option value="">— Select a theme —</option>
                 {THEMES.map((t) => (
                   <option key={t.value} value={t.value}>
                     {t.label}
@@ -282,7 +306,38 @@ export default function Page() {
             </div>
           </div>
 
-          {/* Tote options (do NOT affect design prompt; only saved with meta) */}
+          {/* Time of Day row */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 16,
+              marginBottom: 10,
+            }}
+          >
+            <div>
+              <label style={label}>
+                Time of Day{reqBadge}
+              </label>
+              <select
+                style={select}
+                value={timeOfDay}
+                onChange={(e) => setTimeOfDay(e.target.value)}
+              >
+                <option value="">— Select —</option>
+                {TIME_OF_DAY.map((t) => (
+                  <option key={t.value} value={t.value}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Tote options (do NOT affect design prompt; only saved with meta) */}
+            <div />
+          </div>
+
+          {/* Tote options */}
           <div
             style={{
               display: "grid",
@@ -360,9 +415,7 @@ export default function Page() {
               }}
             >
               <h2 style={{ margin: 0, fontSize: 22 }}>Pick your favorite</h2>
-              <div style={{ color: "#6b7280", fontSize: 14 }}>
-                Click a card to select
-              </div>
+              <div style={{ color: "#6b7280", fontSize: 14 }}>Click a card to select</div>
             </div>
 
             <div
@@ -468,7 +521,9 @@ export default function Page() {
                 color: "#374151",
               }}
             >
-              <strong>Tote Options:</strong> Color – {bagColor}, Type – {bagType}
+              <strong>Tote Options:</strong> Color – {bagColor}, Type – {bagType}; Time of
+              Day – {timeOfDay || "—"}; Theme – {theme || "—"}; Country –{" "}
+              {COUNTRIES.find((c) => c.value === country)?.label || "—"}
             </div>
 
             <div style={{ display: "flex", gap: 12, marginTop: 12 }}>

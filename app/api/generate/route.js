@@ -76,6 +76,7 @@ function buildNameCardPrompt(arabicName) {
   return [
     `Refined Arabic Thuluth calligraphy of the name "${name}"`,
     "thin, flowing white strokes on a perfectly solid black background",
+    "Render the following Arabic text EXACTLY as provided, with no changes in letters",
     "centered composition with generous margins around the lettering",
     "balanced and symmetrical layout, no cropping of any strokes",
     "flat 2D digital artwork, no gradients, no textures, no 3D, no glow",

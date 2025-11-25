@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 
-/* ---------- UI choices ---------- */
+/* ---------- Options ---------- */
 
 const THEMES = [
   { value: "peaceful", label: "Peaceful" },
@@ -40,6 +40,12 @@ const BAG_TYPES = [
   { value: "zipper", label: "Zipper" },
 ];
 
+const FONT_COLORS = [
+  { value: "white", label: "White" },
+  { value: "silver", label: "Silver" },
+  { value: "gold", label: "Gold" },
+];
+
 /* ---------- Styles ---------- */
 
 const pageBg = {
@@ -62,13 +68,17 @@ const card = {
   boxShadow: "0 18px 40px rgba(15,23,42,0.08)",
 };
 
-const label = { fontWeight: 600, marginBottom: 8, display: "block" };
+const labelStyle = {
+  fontWeight: 600,
+  marginBottom: 8,
+  display: "block",
+};
 
 const reqBadge = (
   <span style={{ fontWeight: 600, color: "#b00020", marginLeft: 6 }}>*</span>
 );
 
-const input = {
+const inputBase = {
   width: "100%",
   padding: "12px 14px",
   borderRadius: 12,
@@ -79,7 +89,11 @@ const input = {
   outline: "none",
 };
 
-const select = { ...input, appearance: "none", backgroundClip: "padding-box" };
+const selectStyle = {
+  ...inputBase,
+  appearance: "none",
+  backgroundClip: "padding-box",
+};
 
 const primaryBtn = (enabled = true) => ({
   background: enabled
@@ -109,6 +123,77 @@ const secondaryBtn = {
   cursor: "pointer",
 };
 
+/* ---------- Helpers ---------- */
+
+function getFontColorHex(color) {
+  if (color === "white") return "#FFFFFF";      // clean bright white
+  if (color === "silver") return "#D8D8D8";     // royal silver
+  if (color === "gold") return "#D4AF37";       // royal gold
+  return "#FFFFFF";
+}
+
+
+/**
+ * Render Arabic name on a black background using canvas.
+ * Returns a PNG data URL string.
+ */
+
+async function renderNameCardToDataUrl(arabicName, fontColor) {
+  const text = (arabicName || "").trim();
+  if (!text) return null;
+
+  if (typeof document === "undefined") {
+    // Should not happen because this is a client component
+    return null;
+  }
+
+  // Make sure our custom font is loaded before drawing
+  try {
+    if (document.fonts && document.fonts.load) {
+      // same descriptor we will use in ctx.font below
+      await document.fonts.load('400 520px "FiddeenScheherazade"');
+    }
+  } catch (e) {
+    console.warn("Could not ensure font load, continuing anyway:", e);
+  }
+
+  // Bigger canvas so it prints nicely on a full sheet of paper
+  const size = 1600;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  // Background: solid black
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, size, size);
+
+  // Text styling
+  ctx.fillStyle = getFontColorHex(fontColor);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  // Use our Scheherazade New Bold font, big and dramatic
+  ctx.font = "400 520px 'FiddeenScheherazade'";
+
+  // Try to force right-to-left layout where supported
+  try {
+    ctx.direction = "rtl";
+  } catch {
+    // ignore if not supported
+  }
+
+  const x = size / 2;
+  // Slightly below mathematical center so it feels visually centered
+  const y = size * 0.55;
+
+  ctx.fillText(text, x, y);
+
+  return canvas.toDataURL("image/png");
+}
+
 /* ---------- Page ---------- */
 
 export default function Page() {
@@ -116,13 +201,14 @@ export default function Page() {
   const [designType, setDesignType] = useState("art"); // "art" | "nameCard"
 
   /* form */
-  const [name, setName] = useState(""); // English label, always used
-  const [arabicName, setArabicName] = useState(""); // only for nameCard
+  const [name, setName] = useState(""); // English label
+  const [arabicName, setArabicName] = useState(""); // for nameCard
   const [country, setCountry] = useState("");
   const [theme, setTheme] = useState("");
   const [timeOfDay, setTimeOfDay] = useState("");
   const [bagColor, setBagColor] = useState("beige");
   const [bagType, setBagType] = useState("regular");
+  const [fontColor, setFontColor] = useState("white");
 
   /* generation */
   const [isGenerating, setIsGenerating] = useState(false);
@@ -137,13 +223,10 @@ export default function Page() {
 
   const hasRequired = useMemo(() => {
     if (designType === "art") {
-      return name.trim().length > 0 && timeOfDay;
+      return name.trim().length > 0 && !!timeOfDay;
     }
     // nameCard mode
-    return (
-      name.trim().length > 0 &&
-      arabicName.trim().length > 0
-    );
+    return name.trim().length > 0 && arabicName.trim().length > 0;
   }, [designType, name, timeOfDay, arabicName]);
 
   const canGenerate = useMemo(
@@ -174,7 +257,7 @@ export default function Page() {
     setChosenIndex(null);
     setS3Url("");
     setJobId("");
-    // keep form values so you can tweak and regenerate
+    // keep form values so they can tweak and regenerate
   }, []);
 
   /* ---------- handlers ---------- */
@@ -197,40 +280,52 @@ export default function Page() {
     setGenerateError("");
 
     try {
-      const payload = {
-        name: name.trim(), // label only, never embedded in the art
-        designType,
-        country: designType === "art" ? country || undefined : undefined,
-        theme: designType === "art" ? theme || undefined : undefined,
-        timeOfDay: designType === "art" ? timeOfDay : undefined,
-        arabicName:
-          designType === "nameCard" ? arabicName.trim() || undefined : undefined,
-        bagColor,
-        bagType,
-        previewCount: designType === "art" ? 3 : 1,
-        deferUpload: true,
-      };
+      if (designType === "nameCard") {
+        // Generate locally using canvas
+        const dataUrl = await renderNameCardToDataUrl(arabicName, fontColor);
+        if (!dataUrl) {
+          throw new Error("Could not render name card image.");
+        }
+        setPreviews([dataUrl]);
+        setChosenIndex(0);
+      } else {
+        // Art scene still uses OpenAI backend
+        const payload = {
+          name: name.trim(), // label only, not embedded
+          designType,
+          country: country || undefined,
+          theme: theme || undefined,
+          timeOfDay,
+          bagColor,
+          bagType,
+          previewCount: 3,
+          deferUpload: true,
+        };
 
-      const res = await fetch("/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+        const res = await fetch("/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
 
-      if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(txt || "Failed to generate previews");
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error(txt || "Failed to generate previews");
+        }
+
+        const data = await res.json();
+        if (!data?.images?.length) {
+          throw new Error("No previews returned");
+        }
+
+        setPreviews(data.images);
+        setChosenIndex(0);
       }
-
-      const data = await res.json();
-      if (!data?.images?.length) throw new Error("No previews returned");
-
-      setPreviews(data.images);
-      setChosenIndex(0); // auto select first
     } catch (err) {
       console.error(err);
       setGenerateError(
-        err?.message || "Something went wrong while generating. Please try again."
+        err?.message ||
+          "Something went wrong while generating. Please try again."
       );
     } finally {
       setIsGenerating(false);
@@ -263,7 +358,8 @@ export default function Page() {
             theme: designType === "art" ? theme : undefined,
             timeOfDay: designType === "art" ? timeOfDay : undefined,
             bagColor,
-            bagType,
+            bagType: designType === "art" ? bagType : undefined,
+            fontColor: designType === "nameCard" ? fontColor : undefined,
           },
         }),
       });
@@ -274,14 +370,17 @@ export default function Page() {
       }
 
       const data = await res.json();
-      if (!data?.s3Url) throw new Error("No S3 URL returned");
+      if (!data?.s3Url) {
+        throw new Error("No S3 URL returned");
+      }
 
       setS3Url(data.s3Url);
       if (data.jobId) setJobId(data.jobId);
     } catch (err) {
       console.error(err);
       setGenerateError(
-        err?.message || "Something went wrong while saving. Please try again."
+        err?.message ||
+          "Something went wrong while saving. Please try again."
       );
       setIsChoosing(false);
     }
@@ -297,7 +396,8 @@ export default function Page() {
             Fid Deen Custom Tote Generator
           </h1>
           <p style={{ marginTop: 8, color: "#4a5568" }}>
-            Choose your design type, generate a preview, and save the final tote art.
+            Choose your design type, generate a preview, and save the final tote
+            art.
           </p>
         </header>
 
@@ -305,7 +405,7 @@ export default function Page() {
         <form onSubmit={handleGenerate} style={{ ...card, padding: 20 }}>
           {/* Design Type toggle */}
           <div style={{ marginBottom: 20 }}>
-            <label style={label}>Design Type</label>
+            <label style={labelStyle}>Design Type</label>
             <div
               style={{
                 display: "inline-flex",
@@ -317,7 +417,13 @@ export default function Page() {
             >
               <button
                 type="button"
-                onClick={() => setDesignType("art")}
+                onClick={() => {
+                  setDesignType("art");
+                  setPreviews([]);
+                  setS3Url("");
+                  setChosenIndex(null);
+                  setGenerateError("");
+                }}
                 style={{
                   border: "none",
                   borderRadius: 999,
@@ -325,8 +431,7 @@ export default function Page() {
                   fontSize: 14,
                   fontWeight: 600,
                   cursor: "pointer",
-                  background:
-                    designType === "art" ? "#fff" : "transparent",
+                  background: designType === "art" ? "#fff" : "transparent",
                   boxShadow:
                     designType === "art"
                       ? "0 1px 4px rgba(15,23,42,0.18)"
@@ -337,7 +442,13 @@ export default function Page() {
               </button>
               <button
                 type="button"
-                onClick={() => setDesignType("nameCard")}
+                onClick={() => {
+                  setDesignType("nameCard");
+                  setPreviews([]);
+                  setS3Url("");
+                  setChosenIndex(null);
+                  setGenerateError("");
+                }}
                 style={{
                   border: "none",
                   borderRadius: 999,
@@ -358,7 +469,7 @@ export default function Page() {
             </div>
           </div>
 
-          {/* Main row: name + art settings */}
+          {/* Art scene fields */}
           {designType === "art" && (
             <>
               <div
@@ -370,12 +481,11 @@ export default function Page() {
                 }}
               >
                 <div>
-                  <label style={label}>
-                    Name (for order label)
-                    {reqBadge}
+                  <label style={labelStyle}>
+                    Name (for order label) {reqBadge}
                   </label>
                   <input
-                    style={input}
+                    style={inputBase}
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="e.g., Bilal"
@@ -383,9 +493,9 @@ export default function Page() {
                 </div>
 
                 <div>
-                  <label style={label}>Country</label>
+                  <label style={labelStyle}>Country</label>
                   <select
-                    style={select}
+                    style={selectStyle}
                     value={country}
                     onChange={(e) => setCountry(e.target.value)}
                   >
@@ -398,9 +508,9 @@ export default function Page() {
                 </div>
 
                 <div>
-                  <label style={label}>Theme</label>
+                  <label style={labelStyle}>Theme</label>
                   <select
-                    style={select}
+                    style={selectStyle}
                     value={theme}
                     onChange={(e) => setTheme(e.target.value)}
                   >
@@ -424,12 +534,11 @@ export default function Page() {
                 }}
               >
                 <div>
-                  <label style={label}>
-                    Time of Day
-                    {reqBadge}
+                  <label style={labelStyle}>
+                    Time of Day {reqBadge}
                   </label>
                   <select
-                    style={select}
+                    style={selectStyle}
                     value={timeOfDay}
                     onChange={(e) => setTimeOfDay(e.target.value)}
                   >
@@ -445,7 +554,7 @@ export default function Page() {
             </>
           )}
 
-          {/* Name-card mode fields */}
+          {/* Name card fields */}
           {designType === "nameCard" && (
             <div
               style={{
@@ -456,24 +565,22 @@ export default function Page() {
               }}
             >
               <div>
-                <label style={label}>
-                  English name (for order label)
-                  {reqBadge}
+                <label style={labelStyle}>
+                  English name (for order label) {reqBadge}
                 </label>
                 <input
-                  style={input}
+                  style={inputBase}
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="e.g., Bilal"
                 />
               </div>
               <div>
-                <label style={label}>
-                  Arabic name (for print)
-                  {reqBadge}
+                <label style={labelStyle}>
+                  Arabic name (for print) {reqBadge}
                 </label>
                 <input
-                  style={input}
+                  style={inputBase}
                   value={arabicName}
                   onChange={(e) => setArabicName(e.target.value)}
                   placeholder="e.g., بلال"
@@ -482,7 +589,7 @@ export default function Page() {
             </div>
           )}
 
-          {/* Bag options row (meta only, same for both modes) */}
+          {/* Bag options row (meta only) */}
           <div
             style={{
               display: "grid",
@@ -492,9 +599,9 @@ export default function Page() {
             }}
           >
             <div>
-              <label style={label}>Tote Bag Color</label>
+              <label style={labelStyle}>Tote Bag Color</label>
               <select
-                style={select}
+                style={selectStyle}
                 value={bagColor}
                 onChange={(e) => setBagColor(e.target.value)}
               >
@@ -507,18 +614,37 @@ export default function Page() {
             </div>
 
             <div>
-              <label style={label}>Tote Bag Type</label>
-              <select
-                style={select}
-                value={bagType}
-                onChange={(e) => setBagType(e.target.value)}
-              >
-                {BAG_TYPES.map((b) => (
-                  <option key={b.value} value={b.value}>
-                    {b.label}
-                  </option>
-                ))}
-              </select>
+              {designType === "art" ? (
+                <>
+                  <label style={labelStyle}>Tote Bag Type</label>
+                  <select
+                    style={selectStyle}
+                    value={bagType}
+                    onChange={(e) => setBagType(e.target.value)}
+                  >
+                    {BAG_TYPES.map((b) => (
+                      <option key={b.value} value={b.value}>
+                        {b.label}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              ) : (
+                <>
+                  <label style={labelStyle}>Font Color</label>
+                  <select
+                    style={selectStyle}
+                    value={fontColor}
+                    onChange={(e) => setFontColor(e.target.value)}
+                  >
+                    {FONT_COLORS.map((c) => (
+                      <option key={c.value} value={c.value}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              )}
             </div>
           </div>
 
@@ -600,48 +726,33 @@ export default function Page() {
                     style={{
                       border: active
                         ? "3px solid #0f172a"
-                        : "1px solid #e2e8f0",
-                      borderRadius: 16,
-                      padding: 12,
-                      background: "#fff",
+                        : "1px solid #e5e7eb",
+                      borderRadius: 18,
+                      overflow: "hidden",
                       cursor: "pointer",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 8,
+                      boxShadow: active
+                        ? "0 14px 32px rgba(15,23,42,0.30)"
+                        : "0 8px 18px rgba(15,23,42,0.10)",
+                      transform: active ? "translateY(-2px)" : "none",
+                      transition:
+                        "box-shadow 0.18s ease, transform 0.18s ease, border-color 0.18s ease",
+                      background: "#000",
                     }}
                   >
-                    <div
+                    <img
+                      src={src}
+                      alt={
+                        designType === "art"
+                          ? `Generated tote design ${i + 1}`
+                          : "Generated name card"
+                      }
                       style={{
-                        borderRadius: 12,
-                        overflow: "hidden",
-                        background: "#f9fafb",
-                        padding: 8,
+                        width: "100%",
+                        display: "block",
+                        aspectRatio: "1 / 1",
+                        objectFit: "cover",
                       }}
-                    >
-                      <img
-                        src={src}
-                        alt={`Preview ${i + 1}`}
-                        style={{
-                          width: "100%",
-                          display: "block",
-                          borderRadius: 10,
-                        }}
-                      />
-                    </div>
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        fontSize: 14,
-                        color: "#4b5563",
-                      }}
-                    >
-                      <span>
-                        Option {i + 1}
-                        {active ? " (selected)" : ""}
-                      </span>
-                    </div>
+                    />
                   </div>
                 );
               })}
@@ -651,80 +762,56 @@ export default function Page() {
               style={{
                 marginTop: 18,
                 display: "flex",
-                gap: 12,
-                justifyContent: "flex-end",
+                justifyContent: "space-between",
+                alignItems: "center",
               }}
             >
               <button
                 type="button"
                 onClick={handleChoose}
-                style={primaryBtn(canChoose)}
                 disabled={!canChoose}
+                style={primaryBtn(canChoose)}
               >
-                {isChoosing ? "Saving…" : "Confirm and upload"}
+                {isChoosing ? "Saving…" : "Confirm & upload to S3"}
               </button>
-              <button
-                type="button"
-                onClick={resetAll}
-                style={secondaryBtn}
-              >
-                Start over
-              </button>
+              {chosenIndex !== null && (
+                <div style={{ fontSize: 14, color: "#6b7280" }}>
+                  Selected option {chosenIndex + 1}
+                </div>
+              )}
             </div>
           </section>
         )}
 
-        {/* FINAL STATE */}
+        {/* SUCCESS STATE */}
         {s3Url && (
           <section style={{ ...card, padding: 20, marginTop: 18 }}>
-            <h2 style={{ marginTop: 0, fontSize: 22 }}>Tote saved</h2>
-            <p style={{ color: "#4b5563", marginBottom: 12 }}>
-              The chosen design is uploaded to S3 with all order details.
-              Use the link below to view or download the image for printing.
+            <h2 style={{ margin: 0, fontSize: 22, marginBottom: 8 }}>
+              Design saved to S3
+            </h2>
+            <p style={{ margin: 0, fontSize: 14, color: "#4b5563" }}>
+              You can now open the image from S3 and send it to the Cricut /
+              printer workflow.
             </p>
-            <div
-              style={{
-                display: "flex",
-                gap: 12,
-                alignItems: "center",
-                flexWrap: "wrap",
-              }}
-            >
+            <div style={{ marginTop: 12 }}>
               <a
                 href={s3Url}
                 target="_blank"
                 rel="noreferrer"
                 style={{
-                  ...primaryBtn(true),
-                  textDecoration: "none",
+                  color: "#1d4ed8",
+                  textDecoration: "underline",
+                  fontSize: 14,
                 }}
               >
-                Open Image
+                Open image in new tab
               </a>
-              <button
-                type="button"
-                onClick={resetAll}
-                style={secondaryBtn}
-              >
-                New Tote
-              </button>
             </div>
-            <div style={{ marginTop: 10, fontSize: 13, color: "#6b7280" }}>
-              {designType === "nameCard" && arabicName && (
-                <div>
-                  Name card for <strong>{name}</strong> (
-                  <span dir="rtl" style={{ fontFamily: "inherit" }}>
-                    {arabicName}
-                  </span>
-                  )
-                </div>
-              )}
-              {jobId && (
-                <div style={{ marginTop: 4 }}>
-                  Internal job id: <code>{jobId}</code>
-                </div>
-              )}
-            </div>
+            {jobId && (
+              <p style={{ marginTop: 8, fontSize: 13, color: "#6b7280" }}>
+                Job ID: {jobId}
+              </p>
+            )}
           </section>
         )}
       </div>

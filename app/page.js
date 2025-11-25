@@ -3,6 +3,7 @@
 import { useCallback, useMemo, useState } from "react";
 
 /* ---------- UI choices ---------- */
+
 const THEMES = [
   { value: "peaceful", label: "Peaceful" },
   { value: "islamic", label: "Islamic" },
@@ -39,35 +40,119 @@ const BAG_TYPES = [
   { value: "zipper", label: "Zipper" },
 ];
 
+/* ---------- Styles ---------- */
+
+const pageBg = {
+  background:
+    "linear-gradient(180deg, rgba(244,247,250,1) 0%, rgba(250,251,253,1) 60%)",
+  minHeight: "100vh",
+};
+
+const shell = {
+  maxWidth: 1200,
+  margin: "0 auto",
+  padding: "40px 20px 80px",
+  color: "#1b1f24",
+};
+
+const card = {
+  background: "#ffffff",
+  border: "1px solid #e9eef5",
+  borderRadius: 24,
+  boxShadow: "0 18px 40px rgba(15,23,42,0.08)",
+};
+
+const label = { fontWeight: 600, marginBottom: 8, display: "block" };
+
+const reqBadge = (
+  <span style={{ fontWeight: 600, color: "#b00020", marginLeft: 6 }}>*</span>
+);
+
+const input = {
+  width: "100%",
+  padding: "12px 14px",
+  borderRadius: 12,
+  border: "1px solid #d4dbe6",
+  background: "#fff",
+  fontSize: 16,
+  color: "#131722",
+  outline: "none",
+};
+
+const select = { ...input, appearance: "none", backgroundClip: "padding-box" };
+
+const primaryBtn = (enabled = true) => ({
+  background: enabled
+    ? "linear-gradient(135deg,#121a26 0%,#1f2937 100%)"
+    : "#b9c2d0",
+  color: "#fff",
+  padding: "14px 18px",
+  borderRadius: 12,
+  border: "none",
+  fontSize: 16,
+  fontWeight: 700,
+  cursor: enabled ? "pointer" : "not-allowed",
+  boxShadow: enabled ? "0 6px 14px rgba(17,24,39,0.20)" : "none",
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+});
+
+const secondaryBtn = {
+  background: "#fff",
+  color: "#1b1f24",
+  padding: "14px 18px",
+  borderRadius: 12,
+  border: "1px solid #d4dbe6",
+  fontSize: 16,
+  fontWeight: 600,
+  cursor: "pointer",
+};
+
 /* ---------- Page ---------- */
+
 export default function Page() {
+  /* design mode */
+  const [designType, setDesignType] = useState("art"); // "art" | "nameCard"
+
   /* form */
-  const [name, setName] = useState("");                 // required
-  const [country, setCountry] = useState("");           // optional
-  const [theme, setTheme] = useState("");               // required
-  const [timeOfDay, setTimeOfDay] = useState("");       // required
-  const [bagColor, setBagColor] = useState("beige");    // meta only
-  const [bagType, setBagType] = useState("regular");    // meta only
+  const [name, setName] = useState(""); // English label, always used
+  const [arabicName, setArabicName] = useState(""); // only for nameCard
+  const [country, setCountry] = useState("");
+  const [theme, setTheme] = useState("");
+  const [timeOfDay, setTimeOfDay] = useState("");
+  const [bagColor, setBagColor] = useState("beige");
+  const [bagType, setBagType] = useState("regular");
 
   /* generation */
   const [isGenerating, setIsGenerating] = useState(false);
-  const [generateError, setGenerateError] = useState("");
-
-  /* choose */
-  const [previews, setPreviews] = useState([]); // data URLs
-  const [chosenIndex, setChosenIndex] = useState(null);
   const [isChoosing, setIsChoosing] = useState(false);
-
-  /* result */
+  const [generateError, setGenerateError] = useState("");
+  const [previews, setPreviews] = useState([]); // string[] data URLs
+  const [chosenIndex, setChosenIndex] = useState(null);
   const [s3Url, setS3Url] = useState("");
   const [jobId, setJobId] = useState("");
 
+  /* computed flags */
+
   const hasRequired = useMemo(() => {
-    return name.trim().length > 0 && timeOfDay;
-  }, [name, timeOfDay]);
+    if (designType === "art") {
+      return name.trim().length > 0 && timeOfDay;
+    }
+    // nameCard mode
+    return (
+      name.trim().length > 0 &&
+      arabicName.trim().length > 0
+    );
+  }, [designType, name, timeOfDay, arabicName]);
 
   const canGenerate = useMemo(
-    () => hasRequired && !isGenerating && !isChoosing && previews.length === 0 && !s3Url,
+    () =>
+      hasRequired &&
+      !isGenerating &&
+      !isChoosing &&
+      previews.length === 0 &&
+      !s3Url,
     [hasRequired, isGenerating, isChoosing, previews.length, s3Url]
   );
 
@@ -89,47 +174,64 @@ export default function Page() {
     setChosenIndex(null);
     setS3Url("");
     setJobId("");
-    // keep the form values so the user can tweak and try again
+    // keep form values so you can tweak and regenerate
   }, []);
 
   /* ---------- handlers ---------- */
+
   async function handleGenerate(e) {
     e.preventDefault();
+
     if (!canGenerate) {
       if (!hasRequired) {
-        setGenerateError("Please fill Name and Time of Day before generating.");
+        setGenerateError(
+          designType === "art"
+            ? "Please fill Name and Time of Day before generating."
+            : "Please fill both English Name and Arabic Name before generating."
+        );
       }
       return;
     }
+
     setIsGenerating(true);
     setGenerateError("");
 
     try {
+      const payload = {
+        name: name.trim(), // label only, never embedded in the art
+        designType,
+        country: designType === "art" ? country || undefined : undefined,
+        theme: designType === "art" ? theme || undefined : undefined,
+        timeOfDay: designType === "art" ? timeOfDay : undefined,
+        arabicName:
+          designType === "nameCard" ? arabicName.trim() || undefined : undefined,
+        bagColor,
+        bagType,
+        previewCount: designType === "art" ? 3 : 1,
+        deferUpload: true,
+      };
+
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          // Name is strictly for order labeling later (NOT embedded in the image)
-          name: name.trim(),
-          country: country || undefined, // optional
-          theme: theme || undefined,     // optional now
-          timeOfDay,                     // "daytime" | "nighttime"
-          previewCount: 3,
-          deferUpload: true,
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (!res.ok) {
         const txt = await res.text();
         throw new Error(txt || "Failed to generate previews");
       }
+
       const data = await res.json();
       if (!data?.images?.length) throw new Error("No previews returned");
 
-      setPreviews(data.images.slice(0, 3));
-      setJobId(data.jobId || "");
+      setPreviews(data.images);
+      setChosenIndex(0); // auto select first
     } catch (err) {
-      setGenerateError(`Issue: ${err.message || String(err)}`);
+      console.error(err);
+      setGenerateError(
+        err?.message || "Something went wrong while generating. Please try again."
+      );
     } finally {
       setIsGenerating(false);
     }
@@ -137,6 +239,7 @@ export default function Page() {
 
   async function handleChoose() {
     if (!canChoose) return;
+
     setIsChoosing(true);
     setGenerateError("");
 
@@ -149,11 +252,16 @@ export default function Page() {
         body: JSON.stringify({
           imageDataUrl,
           meta: {
-            // Saved with the render for staff reference only
+            // for staff reference only
             name: name.trim(),
-            country,
-            theme,
-            timeOfDay,
+            arabicName:
+              designType === "nameCard"
+                ? arabicName.trim() || undefined
+                : undefined,
+            designType,
+            country: designType === "art" ? country : undefined,
+            theme: designType === "art" ? theme : undefined,
+            timeOfDay: designType === "art" ? timeOfDay : undefined,
             bagColor,
             bagType,
           },
@@ -162,84 +270,25 @@ export default function Page() {
 
       if (!res.ok) {
         const txt = await res.text();
-        throw new Error(txt || "Upload failed");
+        throw new Error(txt || "Failed to save chosen image");
       }
+
       const data = await res.json();
-      setS3Url(data.s3Url || "");
-      setJobId(data.orderId || jobId || "");
+      if (!data?.s3Url) throw new Error("No S3 URL returned");
+
+      setS3Url(data.s3Url);
+      if (data.jobId) setJobId(data.jobId);
     } catch (err) {
-      setGenerateError(`Issue: ${err.message || String(err)}`);
-    } finally {
+      console.error(err);
+      setGenerateError(
+        err?.message || "Something went wrong while saving. Please try again."
+      );
       setIsChoosing(false);
     }
   }
 
-  /* ---------- styles ---------- */
-  const pageBg = {
-    background:
-      "linear-gradient(180deg, rgba(244,247,250,1) 0%, rgba(250,251,253,1) 60%)",
-    minHeight: "100vh",
-  };
-
-  const shell = {
-    maxWidth: 1200,
-    margin: "0 auto",
-    padding: "40px 20px 80px",
-    color: "#1b1f24",
-  };
-
-  const card = {
-    background: "#ffffff",
-    border: "1px solid #e9eef5",
-    borderRadius: 16,
-    boxShadow: "0 1px 2px rgba(16,24,40,0.04)",
-  };
-
-  const label = { fontWeight: 600, marginBottom: 8, display: "block" };
-
-  const reqBadge = (
-    <span style={{ fontWeight: 600, color: "#b00020", marginLeft: 6 }}>*</span>
-  );
-
-  const input = {
-    width: "100%",
-    padding: "12px 14px",
-    borderRadius: 12,
-    border: "1px solid #d4dbe6",
-    background: "#fff",
-    fontSize: 16,
-    color: "#131722",
-    outline: "none",
-  };
-
-  const select = { ...input, appearance: "none", backgroundClip: "padding-box" };
-
-  const primaryBtn = (enabled = true) => ({
-    background: enabled
-      ? "linear-gradient(135deg,#121a26 0%,#1f2937 100%)"
-      : "#b9c2d0",
-    color: "#fff",
-    padding: "14px 18px",
-    borderRadius: 12,
-    border: "none",
-    fontSize: 16,
-    fontWeight: 700,
-    cursor: enabled ? "pointer" : "not-allowed",
-    boxShadow: enabled ? "0 6px 14px rgba(17,24,39,0.20)" : "none",
-  });
-
-  const secondaryBtn = {
-    background: "#fff",
-    color: "#1b1f24",
-    padding: "14px 18px",
-    borderRadius: 12,
-    border: "1px solid #d4dbe6",
-    fontSize: 16,
-    fontWeight: 600,
-    cursor: "pointer",
-  };
-
   /* ---------- UI ---------- */
+
   return (
     <div style={pageBg}>
       <div style={shell}>
@@ -248,102 +297,198 @@ export default function Page() {
             Fid Deen Custom Tote Generator
           </h1>
           <p style={{ marginTop: 8, color: "#4a5568" }}>
-            Fill the form, generate 3 options, and choose your favorite.
+            Choose your design type, generate a preview, and save the final tote art.
           </p>
         </header>
 
         {/* FORM CARD */}
         <form onSubmit={handleGenerate} style={{ ...card, padding: 20 }}>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1.4fr 1fr 1fr",
-              gap: 16,
-              marginBottom: 14,
-            }}
-          >
-            <div>
-              <label style={label}>
-                Name (for order label){reqBadge}
-              </label>
-              <input
-                style={input}
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="e.g., Bilal"
-              />
-            </div>
-
-            <div>
-              <label style={label}>Country</label>
-              <select
-                style={select}
-                value={country}
-                onChange={(e) => setCountry(e.target.value)}
+          {/* Design Type toggle */}
+          <div style={{ marginBottom: 20 }}>
+            <label style={label}>Design Type</label>
+            <div
+              style={{
+                display: "inline-flex",
+                padding: 4,
+                borderRadius: 999,
+                background: "#f3f4f6",
+                gap: 4,
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setDesignType("art")}
+                style={{
+                  border: "none",
+                  borderRadius: 999,
+                  padding: "6px 14px",
+                  fontSize: 14,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  background:
+                    designType === "art" ? "#fff" : "transparent",
+                  boxShadow:
+                    designType === "art"
+                      ? "0 1px 4px rgba(15,23,42,0.18)"
+                      : "none",
+                }}
               >
-                {COUNTRIES.map((c) => (
-                  <option key={c.value || "none"} value={c.value}>
-                    {c.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label style={label}>Theme (optional)</label>
-              <select
-                style={select}
-                value={theme}
-                onChange={(e) => setTheme(e.target.value)}
+                Art scene
+              </button>
+              <button
+                type="button"
+                onClick={() => setDesignType("nameCard")}
+                style={{
+                  border: "none",
+                  borderRadius: 999,
+                  padding: "6px 14px",
+                  fontSize: 14,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  background:
+                    designType === "nameCard" ? "#fff" : "transparent",
+                  boxShadow:
+                    designType === "nameCard"
+                      ? "0 1px 4px rgba(15,23,42,0.18)"
+                      : "none",
+                }}
               >
-                <option value="">— Select a theme —</option>
-                {THEMES.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
+                Name card
+              </button>
             </div>
           </div>
 
-          {/* Time of Day row */}
+          {/* Main row: name + art settings */}
+          {designType === "art" && (
+            <>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1.4fr 1fr 1fr",
+                  gap: 16,
+                  marginBottom: 14,
+                }}
+              >
+                <div>
+                  <label style={label}>
+                    Name (for order label)
+                    {reqBadge}
+                  </label>
+                  <input
+                    style={input}
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="e.g., Bilal"
+                  />
+                </div>
+
+                <div>
+                  <label style={label}>Country</label>
+                  <select
+                    style={select}
+                    value={country}
+                    onChange={(e) => setCountry(e.target.value)}
+                  >
+                    {COUNTRIES.map((c) => (
+                      <option key={c.value} value={c.value}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label style={label}>Theme</label>
+                  <select
+                    style={select}
+                    value={theme}
+                    onChange={(e) => setTheme(e.target.value)}
+                  >
+                    <option value="">— Select a theme —</option>
+                    {THEMES.map((t) => (
+                      <option key={t.value} value={t.value}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Time of day row */}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: 16,
+                  marginBottom: 10,
+                }}
+              >
+                <div>
+                  <label style={label}>
+                    Time of Day
+                    {reqBadge}
+                  </label>
+                  <select
+                    style={select}
+                    value={timeOfDay}
+                    onChange={(e) => setTimeOfDay(e.target.value)}
+                  >
+                    <option value="">— Select —</option>
+                    {TIME_OF_DAY.map((t) => (
+                      <option key={t.value} value={t.value}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* Name-card mode fields */}
+          {designType === "nameCard" && (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: 16,
+                marginBottom: 14,
+              }}
+            >
+              <div>
+                <label style={label}>
+                  English name (for order label)
+                  {reqBadge}
+                </label>
+                <input
+                  style={input}
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g., Bilal"
+                />
+              </div>
+              <div>
+                <label style={label}>
+                  Arabic name (for print)
+                  {reqBadge}
+                </label>
+                <input
+                  style={input}
+                  value={arabicName}
+                  onChange={(e) => setArabicName(e.target.value)}
+                  placeholder="e.g., بلال"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Bag options row (meta only, same for both modes) */}
           <div
             style={{
               display: "grid",
               gridTemplateColumns: "1fr 1fr",
               gap: 16,
               marginBottom: 10,
-            }}
-          >
-            <div>
-              <label style={label}>
-                Time of Day{reqBadge}
-              </label>
-              <select
-                style={select}
-                value={timeOfDay}
-                onChange={(e) => setTimeOfDay(e.target.value)}
-              >
-                <option value="">— Select —</option>
-                {TIME_OF_DAY.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Tote options (do NOT affect design prompt; only saved with meta) */}
-            <div />
-          </div>
-
-          {/* Tote options */}
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 16,
-              marginBottom: 6,
             }}
           >
             <div>
@@ -378,10 +523,22 @@ export default function Page() {
           </div>
 
           <div style={{ display: "flex", gap: 12, marginTop: 10 }}>
-            <button type="submit" style={primaryBtn(canGenerate)} disabled={!canGenerate}>
-              {isGenerating ? "Generating…" : "Generate 3 Options"}
+            <button
+              type="submit"
+              style={primaryBtn(canGenerate)}
+              disabled={!canGenerate}
+            >
+              {isGenerating
+                ? "Generating…"
+                : designType === "art"
+                ? "Generate 3 Options"
+                : "Generate Name Card"}
             </button>
-            <button type="button" onClick={resetAll} style={secondaryBtn}>
+            <button
+              type="button"
+              onClick={resetAll}
+              style={secondaryBtn}
+            >
               Reset
             </button>
           </div>
@@ -414,14 +571,23 @@ export default function Page() {
                 marginBottom: 12,
               }}
             >
-              <h2 style={{ margin: 0, fontSize: 22 }}>Pick your favorite</h2>
-              <div style={{ color: "#6b7280", fontSize: 14 }}>Click a card to select</div>
+              <h2 style={{ margin: 0, fontSize: 22 }}>
+                {designType === "art"
+                  ? "Pick your favorite"
+                  : "Preview name card"}
+              </h2>
+              <div style={{ color: "#6b7280", fontSize: 14 }}>
+                {designType === "art"
+                  ? "Click a card to select"
+                  : "Confirm this name card"}
+              </div>
             </div>
 
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(3, 1fr)",
+                gridTemplateColumns:
+                  designType === "art" ? "repeat(3, 1fr)" : "1fr",
                 gap: 20,
               }}
             >
@@ -432,101 +598,98 @@ export default function Page() {
                     key={i}
                     onClick={() => setChosenIndex(i)}
                     style={{
-                      border: active ? "3px solid #0f172a" : "1px solid #e2e8f0",
+                      border: active
+                        ? "3px solid #0f172a"
+                        : "1px solid #e2e8f0",
                       borderRadius: 16,
                       padding: 12,
                       background: "#fff",
                       cursor: "pointer",
-                      transition: "transform 120ms ease, box-shadow 120ms ease",
-                      boxShadow: active
-                        ? "0 10px 18px rgba(15,23,42,0.18)"
-                        : "0 2px 8px rgba(17,24,39,0.06)",
-                      transform: active ? "translateY(-3px)" : "none",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 8,
                     }}
                   >
                     <div
                       style={{
-                        width: "100%",
-                        aspectRatio: "1/1",
                         borderRadius: 12,
                         overflow: "hidden",
-                        background: "#f4f6f9",
+                        background: "#f9fafb",
+                        padding: 8,
                       }}
                     >
                       <img
                         src={src}
-                        alt={`Option ${i + 1}`}
+                        alt={`Preview ${i + 1}`}
                         style={{
                           width: "100%",
-                          height: "100%",
-                          objectFit: "cover",
                           display: "block",
+                          borderRadius: 10,
                         }}
                       />
                     </div>
                     <div
                       style={{
-                        paddingTop: 10,
-                        textAlign: "center",
-                        fontWeight: 700,
-                        color: "#111827",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        fontSize: 14,
+                        color: "#4b5563",
                       }}
                     >
-                      {`Option ${["A", "B", "C"][i]}`}
+                      <span>
+                        Option {i + 1}
+                        {active ? " (selected)" : ""}
+                      </span>
                     </div>
                   </div>
                 );
               })}
             </div>
 
-            <div style={{ display: "flex", gap: 12, marginTop: 16 }}>
+            <div
+              style={{
+                marginTop: 18,
+                display: "flex",
+                gap: 12,
+                justifyContent: "flex-end",
+              }}
+            >
               <button
                 type="button"
                 onClick={handleChoose}
-                disabled={!canChoose}
                 style={primaryBtn(canChoose)}
+                disabled={!canChoose}
               >
-                {isChoosing ? "Saving…" : "Choose This Design"}
+                {isChoosing ? "Saving…" : "Confirm and upload"}
               </button>
               <button
                 type="button"
-                onClick={() => setChosenIndex(null)}
+                onClick={resetAll}
                 style={secondaryBtn}
               >
-                Unselect
+                Start over
               </button>
             </div>
           </section>
         )}
 
-        {/* RESULT */}
+        {/* FINAL STATE */}
         {s3Url && (
           <section style={{ ...card, padding: 20, marginTop: 18 }}>
-            <h3 style={{ marginTop: 0 }}>Ready to Print</h3>
-            <p style={{ margin: "6px 0" }}>
-              Order ID: <strong>{jobId || "—"}</strong>
+            <h2 style={{ marginTop: 0, fontSize: 22 }}>Tote saved</h2>
+            <p style={{ color: "#4b5563", marginBottom: 12 }}>
+              The chosen design is uploaded to S3 with all order details.
+              Use the link below to view or download the image for printing.
             </p>
-            <p style={{ margin: "6px 0" }}>
-              File: <code>{new URL(s3Url).pathname.slice(1)}</code>
-            </p>
-
-            {/* show tote meta for staff clarity */}
             <div
               style={{
-                marginTop: 8,
-                background: "#f7fafc",
-                border: "1px solid #e2e8f0",
-                borderRadius: 10,
-                padding: "10px 12px",
-                color: "#374151",
+                display: "flex",
+                gap: 12,
+                alignItems: "center",
+                flexWrap: "wrap",
               }}
             >
-              <strong>Tote Options:</strong> Color – {bagColor}, Type – {bagType}; Time of
-              Day – {timeOfDay || "—"}; Theme – {theme || "—"}; Country –{" "}
-              {COUNTRIES.find((c) => c.value === country)?.label || "—"}
-            </div>
-
-            <div style={{ display: "flex", gap: 12, marginTop: 12 }}>
               <a
                 href={s3Url}
                 target="_blank"
@@ -534,14 +697,33 @@ export default function Page() {
                 style={{
                   ...primaryBtn(true),
                   textDecoration: "none",
-                  display: "inline-block",
                 }}
               >
                 Open Image
               </a>
-              <button type="button" onClick={resetAll} style={secondaryBtn}>
+              <button
+                type="button"
+                onClick={resetAll}
+                style={secondaryBtn}
+              >
                 New Tote
               </button>
+            </div>
+            <div style={{ marginTop: 10, fontSize: 13, color: "#6b7280" }}>
+              {designType === "nameCard" && arabicName && (
+                <div>
+                  Name card for <strong>{name}</strong> (
+                  <span dir="rtl" style={{ fontFamily: "inherit" }}>
+                    {arabicName}
+                  </span>
+                  )
+                </div>
+              )}
+              {jobId && (
+                <div style={{ marginTop: 4 }}>
+                  Internal job id: <code>{jobId}</code>
+                </div>
+              )}
             </div>
           </section>
         )}

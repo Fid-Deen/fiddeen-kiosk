@@ -4,247 +4,178 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { FormData as UndiciFormData } from "undici";
 import OpenAI from "openai";
 
 import {
   COUNTRY_LANDMARKS,
   THEME_DESCRIPTIONS,
-  DEFAULT_MODEL,
-  DEFAULT_STYLE_PRESET,
-  DEFAULT_CFG_SCALE,
-  DEFAULT_ASPECT_RATIO,
-} from "./constants.js";
+  TIME_OF_DAY_HINTS,
+  BASE_STYLE,
+} from "./constants.js"; // adjust path if your constants file is elsewhere
 
-// ---------- OpenAI client (optional) ----------
-const openai = process.env.OPENAI_API_KEY
-  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-  : null;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-// ---------- Prompt helpers ----------
-function basePrompt() {
-  return [
-    "High-quality Islamic-inspired artwork for a tote design.",
-    "Traditional, heritage craft; oil-painting texture; soft, natural light.",
-    "Square composition; clean margins; print-ready clarity.",
-    "Absolutely no people, faces, hands, or readable text.",
-  ].join(" ");
+/* ---------------- helpers ---------------- */
+
+function safeTrim(val) {
+  return typeof val === "string" ? val.trim() : "";
 }
 
-function themeText(theme) {
-  if (!theme) return "";
-  const t = THEME_DESCRIPTIONS?.[theme] || "";
-  return t ? ` ${t}` : "";
+function buildCountryFragment(country) {
+  const key = safeTrim(country).toLowerCase();
+  if (!key) return "";
+  const pool = COUNTRY_LANDMARKS?.[key];
+  if (!Array.isArray(pool) || pool.length === 0) return "";
+  return pool.slice(0, 3).join(", ");
 }
 
-function timeOfDayText(timeOfDay) {
-  if (!timeOfDay) return "";
-  const map = {
-    Dawn: "pre-dawn cool light, gentle mist, subtle glow",
-    Sunrise: "golden sunrise light, long soft shadows",
-    Daytime: "balanced daylight, soft sky, gentle contrast",
-    Sunset: "warm sunset glow, amber rim light, calm atmosphere",
-    Night: "moonlit night, soft lanterns, serene blues",
-  };
-  const t = map[timeOfDay] || "";
-  return t ? ` ${t}` : "";
+function buildThemeFragment(theme) {
+  const key = safeTrim(theme);
+  if (!key) return "";
+  const desc =
+    THEME_DESCRIPTIONS?.[key] ||
+    THEME_DESCRIPTIONS?.[key.toLowerCase()];
+  return desc || "";
 }
 
-function pickCountryVariants(country, k = 3) {
-  const key = (country || "").toLowerCase();
-  const pool =
-    COUNTRY_LANDMARKS?.[key] ||
-    COUNTRY_LANDMARKS?.default || [
-      "Traditional Islamic ornament. No people, no text.",
-    ];
-
-  const idx = [...Array(pool.length).keys()];
-  for (let i = idx.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [idx[i], idx[j]] = [idx[j], idx[i]];
-  }
-  const out = [];
-  for (let i = 0; i < k; i++) out.push(pool[idx[i % pool.length]]);
-  return out;
+function buildTimeOfDayFragment(timeOfDay) {
+  const key = safeTrim(timeOfDay);
+  if (!key) return "";
+  const hint =
+    TIME_OF_DAY_HINTS?.[key] ||
+    TIME_OF_DAY_HINTS?.[key.toLowerCase()];
+  return hint || "";
 }
 
-// ---------- Providers ----------
-async function generateWithStability({
-  prompt,
-  model = DEFAULT_MODEL || "sd3.5-large",
-  style_preset = DEFAULT_STYLE_PRESET || "analog-film",
-  cfg_scale = DEFAULT_CFG_SCALE ?? 4,
-  aspect_ratio = DEFAULT_ASPECT_RATIO || "1:1",
-}) {
-  if (!process.env.STABILITY_API_KEY) throw new Error("Missing STABILITY_API_KEY");
+// art scene prompt (old behavior)
+function buildArtScenePrompt({ country, theme, timeOfDay }) {
+  const parts = [];
 
-  const fd = new UndiciFormData();
-  fd.append("model", model);
-  fd.append("prompt", prompt);
-  fd.append("style_preset", style_preset);
-  fd.append("cfg_scale", String(cfg_scale));
-  fd.append("aspect_ratio", aspect_ratio);
+  const c = buildCountryFragment(country);
+  if (c) parts.push(c);
 
-  const resp = await fetch(
-    "https://api.stability.ai/v2beta/stable-image/generate/sd3",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.STABILITY_API_KEY}`,
-        Accept: "image/*",
-      },
-      body: fd,
-    }
+  const t = buildThemeFragment(theme);
+  if (t) parts.push(t);
+
+  const tod = buildTimeOfDayFragment(timeOfDay);
+  if (tod) parts.push(tod);
+
+  parts.push(
+    BASE_STYLE ||
+      "highly detailed illustration, sharp focus, rich textures, subtle lighting",
+    "no logos, no UI, no screenshots, no watermarks, no usernames",
+    "no readable text in any language"
   );
 
-  if (!resp.ok) {
-    const msg = await resp.text();
-    throw new Error(msg || "Stability API error");
-  }
-
-  const buf = await resp.arrayBuffer();
-  const b64 = Buffer.from(new Uint8Array(buf)).toString("base64");
-  return `data:image/png;base64,${b64}`;
+  return parts.join(", ");
 }
 
-// OpenAI: handle both b64_json and url
-async function generateWithOpenAI({ prompt, size = "1024x1024" }) {
-  if (!openai) throw new Error("Missing OPENAI_API_KEY");
+// name-card prompt (Arabic calligraphy, white on black)
+function buildNameCardPrompt(arabicName) {
+  const name = safeTrim(arabicName) || "اسم";
+  return [
+    `Refined Arabic Thuluth calligraphy of the name "${name}"`,
+    "thin, flowing white strokes on a perfectly solid black background",
+    "centered composition with generous margins around the lettering",
+    "balanced and symmetrical layout, no cropping of any strokes",
+    "flat 2D digital artwork, no gradients, no textures, no 3D, no glow",
+    "no English letters, no Latin script, no numbers",
+    "no extra symbols, no decorative borders, no additional words",
+    "high-resolution square image suitable for printing on tote bags",
+  ].join(", ");
+}
 
-  const r = await openai.images.generate({
+/* --------------- OpenAI only --------------- */
+
+async function generateWithOpenAI(prompt, count) {
+  if (!OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY is not set");
+  }
+
+  const client = new OpenAI({ apiKey: OPENAI_API_KEY });
+
+  const result = await client.images.generate({
     model: "gpt-image-1",
     prompt,
-    size,
+    n: count,
+    size: "1024x1024",
   });
 
-  const item = r?.data?.[0];
-  if (!item) throw new Error("OpenAI returned no data");
-
-  if (item.b64_json) {
-    return `data:image/png;base64,${item.b64_json}`;
+  const data = result?.data || [];
+  if (!Array.isArray(data) || data.length === 0) {
+    throw new Error("OpenAI returned no images");
   }
 
-  if (item.url) {
-    const imgResp = await fetch(item.url);
-    if (!imgResp.ok) throw new Error("Failed to fetch OpenAI image URL");
-    const buf = await imgResp.arrayBuffer();
-    const b64 = Buffer.from(buf).toString("base64");
+  const images = data.map((item) => {
+    const b64 = item?.b64_json;
+    if (!b64 || typeof b64 !== "string") {
+      throw new Error("Invalid OpenAI image payload");
+    }
     return `data:image/png;base64,${b64}`;
+  });
+
+  return images;
+}
+
+/* ---------------- route handler ---------------- */
+
+export async function POST(req) {
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json(
+      { error: "Invalid JSON body" },
+      { status: 400 }
+    );
   }
 
-  throw new Error("OpenAI returned neither b64_json nor url");
-}
+  const designType = body?.designType === "nameCard" ? "nameCard" : "art";
+  const previewCount =
+    typeof body?.previewCount === "number"
+      ? body.previewCount
+      : designType === "nameCard"
+      ? 1
+      : 3;
 
-function logOpenAIError(label, err) {
-  const info = {
-    label,
-    message: err?.message,
-    status: err?.status,
-    code: err?.code,
-  };
   try {
-    info.body = err?.response ? JSON.stringify(err.response.data) : undefined;
-  } catch {}
-  console.error("OpenAI image error:", info);
-}
+    let prompt;
 
-// ---------- POST /api/generate ----------
-export async function POST(req) {
-  try {
-    const body = await req.json();
-    const {
-      name = "",
-      country = "morocco", 
-      theme = "", // Optional Now
-      timeOfDay = "Daytime",
-      previewCount = 3,
-      model = DEFAULT_MODEL || "sd3.5-large",
-      style_preset = DEFAULT_STYLE_PRESET || "analog-film",
-    } = body || {};
-
-    const need = Math.max(1, Math.min(Number(previewCount) || 3, 3));
-    const variants = pickCountryVariants(country, need);
-
-    const base = basePrompt();
-    const prompts = variants.map(
-      (motif) =>
-        `${base} ${motif}${themeText(theme)}${timeOfDayText(timeOfDay)}. Ultra-detailed materials; natural palettes; soft cinematic light.`
-    );
-
-    // 1 Stability + 2 OpenAI (fallback to Stability for any failures)
-    const tasks = [];
-
-    if (process.env.STABILITY_API_KEY) {
-      tasks.push(
-        generateWithStability({ prompt: prompts[0], model, style_preset })
-      );
-    }
-
-    if (openai) {
-      const p1 = prompts[1] || prompts[0];
-      const p2 = prompts[2] || prompts[0];
-      tasks.push(
-        (async () => {
-          try {
-            return await generateWithOpenAI({ prompt: p1 });
-          } catch (e) {
-            logOpenAIError("openai-1", e);
-            throw e;
-          }
-        })()
-      );
-      tasks.push(
-        (async () => {
-          try {
-            return await generateWithOpenAI({ prompt: p2 });
-          } catch (e) {
-            logOpenAIError("openai-2", e);
-            throw e;
-          }
-        })()
-      );
-    }
-
-    // If OpenAI is not configured, fill remaining slots with Stability
-    while (tasks.length < need && process.env.STABILITY_API_KEY) {
-      const p = prompts[tasks.length] || prompts[0];
-      tasks.push(generateWithStability({ prompt: p, model, style_preset }));
-    }
-
-    if (tasks.length === 0) {
-      return NextResponse.json(
-        { error: "No providers available (check API keys)" },
-        { status: 500 }
-      );
-    }
-
-    const settled = await Promise.allSettled(tasks);
-    let images = settled
-      .filter((r) => r.status === "fulfilled")
-      .map((r) => r.value);
-
-    // Top up to `need` with Stability if any failed
-    while (images.length < need && process.env.STABILITY_API_KEY) {
-      try {
-        const p = prompts[images.length] || prompts[0];
-        const img = await generateWithStability({ prompt: p, model, style_preset });
-        images.push(img);
-      } catch {
-        break;
+    if (designType === "nameCard") {
+      const arabicName = safeTrim(body?.arabicName);
+      if (!arabicName) {
+        return NextResponse.json(
+          { error: "Arabic name is required for nameCard designs." },
+          { status: 400 }
+        );
       }
+      prompt = buildNameCardPrompt(arabicName);
+    } else {
+      const country = safeTrim(body?.country);
+      const theme = safeTrim(body?.theme);
+      const timeOfDay = safeTrim(body?.timeOfDay);
+
+      if (!timeOfDay) {
+        return NextResponse.json(
+          { error: "Time of day is required for art scene designs." },
+          { status: 400 }
+        );
+      }
+
+      prompt = buildArtScenePrompt({ country, theme, timeOfDay });
     }
 
-    if (images.length === 0) {
-      const firstErr =
-        settled.find((r) => r.status === "rejected")?.reason?.message ||
-        "Image generation failed";
-      return NextResponse.json({ error: firstErr }, { status: 502 });
-    }
+    const images = await generateWithOpenAI(prompt, previewCount);
 
-    const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    return NextResponse.json({ images, jobId }, { status: 200 });
+    return NextResponse.json({
+      images,
+      provider: "openai",
+    });
   } catch (err) {
     console.error("Generate route error:", err);
-    return NextResponse.json({ error: "Server error" }, { status: 500 });
+    return NextResponse.json(
+      { error: err?.message || "Failed to generate images" },
+      { status: 500 }
+    );
   }
 }

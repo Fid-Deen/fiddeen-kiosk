@@ -1,28 +1,27 @@
 // app/api/generate/s3Uploads.js
-// Upload a PNG buffer to S3 with tags + metadata, then log the render in DynamoDB.
-// Returns the public S3 URL as a string.
 
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { DynamoDBClient, PutItemCommand } from "@aws-sdk/client-dynamodb";
+import { SESv2Client, SendEmailCommand } from "@aws-sdk/client-sesv2";
 
-// ---- env ----
 const REGION = process.env.AWS_REGION;
 const S3_BUCKET = process.env.S3_BUCKET;
+const SES_FROM = process.env.SES_FROM_EMAIL;
+const SES_TO = process.env.SES_TO_EMAIL;
 
-// ---- aws clients ----
-const s3 = new S3Client({
+const baseAwsConfig = {
   region: REGION,
   credentials: {
     accessKeyId: process.env.AWS_ACCESS_KEY_ID,
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
   },
-});
+};
 
-const ddb = new DynamoDBClient({ region: REGION });
+const s3 = new S3Client(baseAwsConfig);
+const ddb = new DynamoDBClient(baseAwsConfig);
+const ses = new SESv2Client(baseAwsConfig);
 
-// ---- helpers ----
 function tagSafe(s = "") {
-  // allow only AWS tag-safe chars then trim (max 256)
   return String(s)
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -35,47 +34,71 @@ function encodeKV(k, v) {
   return `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`;
 }
 
-/**
- * Upload to S3 and log to DynamoDB.
- * @param {Buffer} fileBuffer - PNG bytes
- * @param {string} key - S3 key (e.g. renders/2025/11/12/bilal-peaceful-nighttime-palestine_1731430000000.png)
- * @param {Object} meta - fields forwarded from /choose
- *   Expected: {
- *     name, theme, color, lang, email,
- *     orderId, jobId, chosenIndex,
- *     country, timeOfDay, bagType, bagColor,
- *     app, kind
- *   }
- * @returns {Promise<string>} s3Url
- */
+async function emailRenderNotification(s3Url, meta = {}) {
+  if (!SES_FROM || !SES_TO) return;
+
+  const {
+    name = "customer",
+    theme = "",
+    timeOfDay = "",
+    country = "",
+    bagColor = "",
+    bagType = "",
+  } = meta;
+
+  const subject = `New Fid Deen tote design for ${name}`;
+  const lines = [
+    `A new tote design has been generated and uploaded to S3.`,
+    "",
+    `Name:        ${name}`,
+    country ? `Country:     ${country}` : "",
+    theme ? `Theme:       ${theme}` : "",
+    timeOfDay ? `Time of day: ${timeOfDay}` : "",
+    bagColor ? `Bag color:   ${bagColor}` : "",
+    bagType ? `Bag type:    ${bagType}` : "",
+    "",
+    `Image URL:`,
+    s3Url,
+  ].filter(Boolean);
+
+  const bodyText = lines.join("\n");
+
+  const command = new SendEmailCommand({
+    FromEmailAddress: SES_FROM,
+    Destination: { ToAddresses: [SES_TO] },
+    Content: {
+      Simple: {
+        Subject: { Data: subject },
+        Body: { Text: { Data: bodyText } },
+      },
+    },
+  });
+
+  await ses.send(command);
+}
+
 export default async function uploadToS3(fileBuffer, key, meta = {}) {
   if (!REGION || !S3_BUCKET) {
     throw new Error("Missing AWS_REGION or S3_BUCKET environment variables");
   }
 
-  // Whitelist & defaults (keep backward compatible keys)
   const {
     name = "na",
     theme = "na",
-    color = "na",        // historical 'color' field (we map bagColor -> color in /choose)
+    color = "na",
     lang = "na",
-    email = "",          // optional; don't put in S3 tags
+    email = "",
     orderId = "",
     jobId = "",
     chosenIndex = 0,
-
-    // New fields
     country = "",
-    timeOfDay = "",      // "daytime" | "nighttime"
+    timeOfDay = "",
     bagType = "",
     bagColor = "",
-
     app = "fiddeen",
     kind = "render",
   } = meta;
 
-  // ---------------- S3 Tags ----------------
-  // Keep under S3's 10-tag limit. Prioritize core queryable fields.
   const tagPairs = [
     ["app", app],
     ["kind", kind],
@@ -83,7 +106,7 @@ export default async function uploadToS3(fileBuffer, key, meta = {}) {
     ["theme", theme],
     ["timeOfDay", timeOfDay],
     ["country", country],
-    ["color", color], // legacy compat
+    ["color", color],
     ["lang", lang],
   ]
     .filter(([_, v]) => String(v || "").trim().length > 0)
@@ -91,34 +114,24 @@ export default async function uploadToS3(fileBuffer, key, meta = {}) {
 
   const Tagging = tagPairs.join("&");
 
-  // ---------------- S3 Metadata ----------------
-  // Can be more verbose than tags.
   const Metadata = {
     app: String(app),
     kind: String(kind),
-
     name: String(name),
     theme: String(theme),
-    color: String(color),      // legacy
+    color: String(color),
     lang: String(lang),
-
-    // new fields
     country: String(country || ""),
     timeOfDay: String(timeOfDay || ""),
     bagType: String(bagType || ""),
     bagColor: String(bagColor || ""),
-
-    // operational context
     orderId: String(orderId || ""),
     jobId: String(jobId || ""),
     chosenIndex: String(chosenIndex ?? 0),
-
-    // created-at for convenience
     createdAt: new Date().toISOString(),
   };
-  if (email) Metadata.email = String(email); // include if provided
+  if (email) Metadata.email = String(email);
 
-  // ---- put to S3 ----
   await s3.send(
     new PutObjectCommand({
       Bucket: S3_BUCKET,
@@ -132,43 +145,45 @@ export default async function uploadToS3(fileBuffer, key, meta = {}) {
 
   const s3Url = `https://${S3_BUCKET}.s3.${REGION}.amazonaws.com/${key}`;
 
-  // ---- log to dynamodb (best effort) ----
   try {
     const now = Date.now();
     const d = new Date();
-    const dayPk = `day#${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(
-      2,
-      "0"
-    )}-${String(d.getUTCDate()).padStart(2, "0")}`;
+    const dayPk = `day#${d.getUTCFullYear()}-${String(
+      d.getUTCMonth() + 1
+    ).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 
-    // Build item (DynamoDB is schemaless; add new attributes safely)
     const Item = {
       pk: { S: dayPk },
       sk: { N: String(now) },
-
-      // core fields
       name: { S: String(name) },
-      theme: { S: String(theme) },
       color: { S: String(color) },
       lang: { S: String(lang) },
-
-      // new fields
-      time_of_day: { S: String(timeOfDay || "") },
-      country: { S: String(country || "") },
-      bag_color: { S: String(bagColor || "") },
-      bag_type: { S: String(bagType || "") },
-
-      // operational context
+      s3_key: { S: key },
+      s3_url: { S: s3Url },
       order_id: { S: String(orderId || "") },
       job_id: { S: String(jobId || "") },
       chosen_index: { N: String(chosenIndex ?? 0) },
-
-      // S3
-      s3_key: { S: key },
-      s3_url: { S: s3Url },
     };
 
-    if (email) Item.email = { S: String(email) };
+    // Only include these if non-empty so DynamoDB secondary indexes are happy
+    if (String(theme || "").trim() !== "") {
+      Item.theme = { S: String(theme) };
+    }
+    if (String(timeOfDay || "").trim() !== "") {
+      Item.time_of_day = { S: String(timeOfDay) };
+    }
+    if (String(country || "").trim() !== "") {
+      Item.country = { S: String(country) };
+    }
+    if (String(bagColor || "").trim() !== "") {
+      Item.bag_color = { S: String(bagColor) };
+    }
+    if (String(bagType || "").trim() !== "") {
+      Item.bag_type = { S: String(bagType) };
+    }
+    if (email) {
+      Item.email = { S: String(email) };
+    }
 
     await ddb.send(
       new PutItemCommand({
@@ -179,7 +194,20 @@ export default async function uploadToS3(fileBuffer, key, meta = {}) {
     console.log("✅ Logged render to DynamoDB");
   } catch (err) {
     console.error("❌ DynamoDB logging failed:", err);
-    // do not throw; upload succeeded and caller should still get the URL
+  }
+
+  try {
+    await emailRenderNotification(s3Url, {
+      name,
+      theme,
+      timeOfDay,
+      country,
+      bagColor,
+      bagType,
+    });
+    console.log("✅ Email notification sent");
+  } catch (err) {
+    console.error("❌ Email notification failed:", err);
   }
 
   return s3Url;

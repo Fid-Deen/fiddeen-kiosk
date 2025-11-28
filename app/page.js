@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 /* ---------- Options ---------- */
 
@@ -45,6 +45,78 @@ const FONT_COLORS = [
   { value: "silver", label: "Silver" },
   { value: "gold", label: "Gold" },
 ];
+
+/**
+ * Language / script config for name cards.
+ * Font family names must match @font-face declarations in app_globals.css.
+ * For languages where you want auto transliteration, useTransliteration = true.
+ */
+const LANGUAGE_CONFIG = {
+  arabic: {
+    value: "arabic",
+    label: "Arabic",
+    fontFamily: "FiddeenScheherazade",
+    direction: "rtl",
+    useTransliteration: true,
+    targetCode: "ar",
+  },
+  urdu: {
+    value: "urdu",
+    label: "Urdu",
+    fontFamily: "FiddeenUrdu",
+    direction: "rtl",
+    useTransliteration: true,
+    targetCode: "ur",
+  },
+  bengali: {
+    value: "bengali",
+    label: "Bengali",
+    fontFamily: "FiddeenBengali",
+    direction: "ltr",
+    useTransliteration: true,
+    targetCode: "bn",
+  },
+  hindi: {
+    value: "hindi",
+    label: "Hindi (Devanagari)",
+    fontFamily: "FiddeenDevanagari",
+    direction: "ltr",
+    useTransliteration: true,
+    targetCode: "hi",
+  },
+  japanese: {
+    value: "japanese",
+    label: "Japanese",
+    fontFamily: "FiddeenJapanese",
+    direction: "ltr",
+    useTransliteration: true, // you enabled this
+    targetCode: "ja",
+  },
+  korean: {
+    value: "korean",
+    label: "Korean",
+    fontFamily: "FiddeenKorean",
+    direction: "ltr",
+    useTransliteration: true, // you enabled this
+    targetCode: "ko",
+  },
+  zh_hans: {
+    value: "zh_hans",
+    label: "Chinese (Simplified)",
+    fontFamily: "FiddeenChineseSimplified",
+    direction: "ltr",
+    useTransliteration: true, // you enabled this
+    targetCode: "zh-CN",
+  },
+  zh_hant: {
+    value: "zh_hant",
+    label: "Chinese (Traditional)",
+    fontFamily: "FiddeenChineseTraditional",
+    direction: "ltr",
+    useTransliteration: true, // you enabled this
+    targetCode: "zh-TW",
+  },
+};
 
 /* ---------- Styles ---------- */
 
@@ -126,38 +198,36 @@ const secondaryBtn = {
 /* ---------- Helpers ---------- */
 
 function getFontColorHex(color) {
-  if (color === "white") return "#FFFFFF";      // clean bright white
-  if (color === "silver") return "#D8D8D8";     // royal silver
-  if (color === "gold") return "#D4AF37";       // royal gold
+  if (color === "white") return "#FFFFFF";
+  if (color === "silver") return "#D8D8D8";
+  if (color === "gold") return "#D4AF37";
   return "#FFFFFF";
 }
 
-
 /**
- * Render Arabic name on a black background using canvas.
+ * Render name on a black background using canvas.
  * Returns a PNG data URL string.
  */
-
-async function renderNameCardToDataUrl(arabicName, fontColor) {
+async function renderNameCardToDataUrl(arabicName, fontColor, langConfig) {
   const text = (arabicName || "").trim();
   if (!text) return null;
 
   if (typeof document === "undefined") {
-    // Should not happen because this is a client component
     return null;
   }
 
-  // Make sure our custom font is loaded before drawing
+  const fontFamily = langConfig?.fontFamily || "FiddeenScheherazade";
+  const direction = langConfig?.direction === "ltr" ? "ltr" : "rtl";
+  const fontDescriptor = `400 520px "${fontFamily}"`;
+
   try {
     if (document.fonts && document.fonts.load) {
-      // same descriptor we will use in ctx.font below
-      await document.fonts.load('400 520px "FiddeenScheherazade"');
+      await document.fonts.load(fontDescriptor);
     }
   } catch (e) {
     console.warn("Could not ensure font load, continuing anyway:", e);
   }
 
-  // Bigger canvas so it prints nicely on a full sheet of paper
   const size = 1600;
   const canvas = document.createElement("canvas");
   canvas.width = size;
@@ -166,27 +236,21 @@ async function renderNameCardToDataUrl(arabicName, fontColor) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
 
-  // Background: solid black
   ctx.fillStyle = "#000000";
   ctx.fillRect(0, 0, size, size);
 
-  // Text styling
   ctx.fillStyle = getFontColorHex(fontColor);
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
+  ctx.font = fontDescriptor;
 
-  // Use our Scheherazade New Bold font, big and dramatic
-  ctx.font = "400 520px 'FiddeenScheherazade'";
-
-  // Try to force right-to-left layout where supported
   try {
-    ctx.direction = "rtl";
+    ctx.direction = direction;
   } catch {
     // ignore if not supported
   }
 
   const x = size / 2;
-  // Slightly below mathematical center so it feels visually centered
   const y = size * 0.55;
 
   ctx.fillText(text, x, y);
@@ -201,8 +265,10 @@ export default function Page() {
   const [designType, setDesignType] = useState("art"); // "art" | "nameCard"
 
   /* form */
-  const [name, setName] = useState(""); // English label
-  const [arabicName, setArabicName] = useState(""); // for nameCard
+  const [name, setName] = useState(""); // Purchaser name (order label, internal only)
+  const [englishName, setEnglishName] = useState(""); // Name for tote bag (typed in English)
+  const [arabicName, setArabicName] = useState(""); // Name for print (Preview / final script)
+  const [preferredScript, setPreferredScript] = useState("arabic");
   const [country, setCountry] = useState("");
   const [theme, setTheme] = useState("");
   const [timeOfDay, setTimeOfDay] = useState("");
@@ -219,13 +285,20 @@ export default function Page() {
   const [s3Url, setS3Url] = useState("");
   const [jobId, setJobId] = useState("");
 
-  /* computed flags */
+  /* transliteration state */
+  const [isTransliterating, setIsTransliterating] = useState(false);
+  const [previewTouched, setPreviewTouched] = useState(false);
 
+  const selectedLanguageConfig = useMemo(
+    () => LANGUAGE_CONFIG[preferredScript] || LANGUAGE_CONFIG.arabic,
+    [preferredScript]
+  );
+
+  /* computed flags */
   const hasRequired = useMemo(() => {
     if (designType === "art") {
       return name.trim().length > 0 && !!timeOfDay;
     }
-    // nameCard mode
     return name.trim().length > 0 && arabicName.trim().length > 0;
   }, [designType, name, timeOfDay, arabicName]);
 
@@ -257,8 +330,64 @@ export default function Page() {
     setChosenIndex(null);
     setS3Url("");
     setJobId("");
-    // keep form values so they can tweak and regenerate
   }, []);
+
+  /* ---------- transliteration effect ---------- */
+
+  useEffect(() => {
+    if (designType !== "nameCard") return;
+
+    const trimmedName = englishName.trim();
+    const cfg = selectedLanguageConfig;
+
+    if (!trimmedName) return;
+    if (!cfg || !cfg.useTransliteration) return;
+    if (previewTouched) return;
+
+    let cancelled = false;
+    const controller = new AbortController();
+
+    const timeoutId = setTimeout(async () => {
+      try {
+        setIsTransliterating(true);
+
+        const res = await fetch("/api/transliterate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: trimmedName,
+            targetLanguage: cfg.targetCode || cfg.value,
+          }),
+          signal: controller.signal,
+        });
+
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error(txt || "Transliteration failed");
+        }
+
+        const data = await res.json();
+
+        if (!cancelled && data && typeof data.text === "string") {
+          setArabicName(data.text);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.error("Transliteration error:", err);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsTransliterating(false);
+        }
+      }
+    }, 400);
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+      clearTimeout(timeoutId);
+    };
+  }, [designType, englishName, selectedLanguageConfig, previewTouched]);
 
   /* ---------- handlers ---------- */
 
@@ -270,7 +399,7 @@ export default function Page() {
         setGenerateError(
           designType === "art"
             ? "Please fill Name and Time of Day before generating."
-            : "Please fill both English Name and Arabic Name before generating."
+            : "Please fill both Purchaser Name and Name For Print (Preview) before generating."
         );
       }
       return;
@@ -281,17 +410,19 @@ export default function Page() {
 
     try {
       if (designType === "nameCard") {
-        // Generate locally using canvas
-        const dataUrl = await renderNameCardToDataUrl(arabicName, fontColor);
+        const dataUrl = await renderNameCardToDataUrl(
+          arabicName,
+          fontColor,
+          selectedLanguageConfig
+        );
         if (!dataUrl) {
           throw new Error("Could not render name card image.");
         }
         setPreviews([dataUrl]);
         setChosenIndex(0);
       } else {
-        // Art scene still uses OpenAI backend
         const payload = {
-          name: name.trim(), // label only, not embedded
+          name: name.trim(),
           designType,
           country: country || undefined,
           theme: theme || undefined,
@@ -347,7 +478,6 @@ export default function Page() {
         body: JSON.stringify({
           imageDataUrl,
           meta: {
-            // for staff reference only
             name: name.trim(),
             arabicName:
               designType === "nameCard"
@@ -379,8 +509,7 @@ export default function Page() {
     } catch (err) {
       console.error(err);
       setGenerateError(
-        err?.message ||
-          "Something went wrong while saving. Please try again."
+        err?.message || "Something went wrong while saving. Please try again."
       );
       setIsChoosing(false);
     }
@@ -524,7 +653,6 @@ export default function Page() {
                 </div>
               </div>
 
-              {/* Time of day row */}
               <div
                 style={{
                   display: "grid",
@@ -554,7 +682,7 @@ export default function Page() {
             </>
           )}
 
-          {/* Name card fields */}
+          {/* Name card fields – reordered as you requested */}
           {designType === "nameCard" && (
             <div
               style={{
@@ -564,9 +692,10 @@ export default function Page() {
                 marginBottom: 14,
               }}
             >
+              {/* LEFT COLUMN */}
               <div>
                 <label style={labelStyle}>
-                  English name (for order label) {reqBadge}
+                  Purchaser Name (Order Label) {reqBadge}
                 </label>
                 <input
                   style={inputBase}
@@ -574,22 +703,86 @@ export default function Page() {
                   onChange={(e) => setName(e.target.value)}
                   placeholder="e.g., Bilal"
                 />
+
+                <div style={{ marginTop: 10 }}>
+                  <label style={labelStyle}>
+                    Name For Tote Bag (Type in English)
+                  </label>
+                  <input
+                    style={inputBase}
+                    value={englishName}
+                    onChange={(e) => {
+                      setEnglishName(e.target.value);
+                      setPreviewTouched(false);
+                    }}
+                    placeholder="e.g., Bilal"
+                  />
+                </div>
+
+                <div style={{ marginTop: 10 }}>
+                  <label style={labelStyle}>Font Color</label>
+                  <select
+                    style={selectStyle}
+                    value={fontColor}
+                    onChange={(e) => setFontColor(e.target.value)}
+                  >
+                    {FONT_COLORS.map((c) => (
+                      <option key={c.value} value={c.value}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div style={{ marginTop: 10 }}>
+                  <label style={labelStyle}>Preferred Script / Language</label>
+                  <select
+                    style={selectStyle}
+                    value={preferredScript}
+                    onChange={(e) => {
+                      setPreferredScript(e.target.value);
+                      setPreviewTouched(false);
+                    }}
+                  >
+                    {Object.values(LANGUAGE_CONFIG).map((lang) => (
+                      <option key={lang.value} value={lang.value}>
+                        {lang.label}
+                      </option>
+                    ))}
+                  </select>
+                  {isTransliterating && (
+                    <div
+                      style={{
+                        marginTop: 4,
+                        fontSize: 12,
+                        color: "#6b7280",
+                      }}
+                    >
+                      Generating script…
+                    </div>
+                  )}
+                </div>
               </div>
+
+              {/* RIGHT COLUMN */}
               <div>
                 <label style={labelStyle}>
-                  Arabic name (for print) {reqBadge}
+                  Name For Print (Preview) {reqBadge}
                 </label>
                 <input
                   style={inputBase}
                   value={arabicName}
-                  onChange={(e) => setArabicName(e.target.value)}
-                  placeholder="e.g., بلال"
+                  onChange={(e) => {
+                    setArabicName(e.target.value);
+                    setPreviewTouched(true);
+                  }}
+                  placeholder="Preview text in final script"
                 />
               </div>
             </div>
           )}
 
-          {/* Bag options row (meta only) */}
+          {/* Bag options row */}
           <div
             style={{
               display: "grid",
@@ -598,20 +791,7 @@ export default function Page() {
               marginBottom: 10,
             }}
           >
-            <div>
-              <label style={labelStyle}>Tote Bag Color</label>
-              <select
-                style={selectStyle}
-                value={bagColor}
-                onChange={(e) => setBagColor(e.target.value)}
-              >
-                {BAG_COLORS.map((b) => (
-                  <option key={b.value} value={b.value}>
-                    {b.label}
-                  </option>
-                ))}
-              </select>
-            </div>
+            
 
             <div>
               {designType === "art" ? (
@@ -630,20 +810,9 @@ export default function Page() {
                   </select>
                 </>
               ) : (
-                <>
-                  <label style={labelStyle}>Font Color</label>
-                  <select
-                    style={selectStyle}
-                    value={fontColor}
-                    onChange={(e) => setFontColor(e.target.value)}
-                  >
-                    {FONT_COLORS.map((c) => (
-                      <option key={c.value} value={c.value}>
-                        {c.label}
-                      </option>
-                    ))}
-                  </select>
-                </>
+                // In nameCard mode we no longer show anything here;
+                // we left this column empty to avoid changing the broader layout.
+                <div />
               )}
             </div>
           </div>

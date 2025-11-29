@@ -211,58 +211,104 @@ function getFontColorHex(color) {
 async function renderNameCardToDataUrl(arabicName, fontColor, langConfig) {
   const text = (arabicName || "").trim();
   if (!text) return null;
+  if (typeof document === "undefined") return null;
 
-  if (typeof document === "undefined") {
-    return null;
-  }
-
+  // FONT + DIRECTION
   const fontFamily = langConfig?.fontFamily || "FiddeenScheherazade";
   const direction = langConfig?.direction === "ltr" ? "ltr" : "rtl";
-  const fontDescriptor = `400 520px "${fontFamily}"`;
 
-  try {
-    if (document.fonts && document.fonts.load) {
-      await document.fonts.load(fontDescriptor);
-    }
-  } catch (e) {
-    console.warn("Could not ensure font load, continuing anyway:", e);
+  // SPLIT INTO 1–3 LINES
+  const words = text.split(/\s+/);
+  let lines = [];
+  if (words.length === 1) {
+    lines = [text];
+  } else if (words.length === 2) {
+    lines = [words[0], words[1]];
+  } else {
+    const first = words[0];
+    const last = words[words.length - 1];
+    const middle = words.slice(1, words.length - 1).join(" ");
+    lines = [first, middle, last];
   }
 
-  const size = 1600;
+  const canvasSize = 1600;
+  const padding = 100; // Top, bottom, left, right safe zone
+  const usableWidth = canvasSize - padding * 2;
+  const usableHeight = canvasSize - padding * 2;
+
+  // CANVAS
   const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
-
+  canvas.width = canvasSize;
+  canvas.height = canvasSize;
   const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
 
+  // BG
   ctx.fillStyle = "#000000";
-  ctx.fillRect(0, 0, size, size);
+  ctx.fillRect(0, 0, canvasSize, canvasSize);
 
-  ctx.fillStyle = getFontColorHex(fontColor);
+  // TEXT ALIGNMENT
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.font = fontDescriptor;
+  try { ctx.direction = direction; } catch {}
 
+  // OUTLINE + FILL COLORS
+  const fillColor = getFontColorHex(fontColor);
+  const outlineColor = "#000000"; // Cricut-safe outline
+
+  // LOAD FONT LARGE FOR MEASUREMENT
   try {
-    ctx.direction = direction;
-  } catch {
-    // ignore if not supported
+    if (document.fonts && document.fonts.load) {
+      await document.fonts.load(`400 520px "${fontFamily}"`);
+    }
+  } catch {}
+
+  // ==== FIND CONSISTENT FONT SIZE ====
+  // Try a large size, shrink until BOTH width and height fit.
+  let fontSize = 520;
+  const minFont = 120;
+
+  while (fontSize > minFont) {
+    ctx.font = `400 ${fontSize}px "${fontFamily}"`;
+
+    // Measure each line width
+    const widths = lines.map(line => ctx.measureText(line).width);
+    const maxLineWidth = Math.max(...widths);
+
+    // Compute total height
+    const totalHeight = lines.length * fontSize * 1.25;
+
+    if (maxLineWidth <= usableWidth && totalHeight <= usableHeight) {
+      break;
+    }
+
+    fontSize -= 10;
   }
 
-  const x = size / 2;
-  const y = size * 0.55;
+  // ==== DRAW LINES ====
+  const totalHeight = lines.length * fontSize * 1.25;
+  let startY = (canvasSize - totalHeight) / 2 + fontSize / 2;
 
-  ctx.fillText(text, x, y);
+  ctx.lineWidth = Math.max(fontSize * 0.06, 6); // auto outline thickness
+
+  for (const line of lines) {
+    ctx.font = `400 ${fontSize}px "${fontFamily}"`;
+    ctx.strokeStyle = outlineColor;
+    ctx.strokeText(line, canvasSize / 2, startY);
+    ctx.fillStyle = fillColor;
+    ctx.fillText(line, canvasSize / 2, startY);
+
+    startY += fontSize * 1.25; // move down for next line
+  }
 
   return canvas.toDataURL("image/png");
 }
+
 
 /* ---------- Page ---------- */
 
 export default function Page() {
   /* design mode */
-  const [designType, setDesignType] = useState("art"); // "art" | "nameCard"
+  const [designType, setDesignType] = useState("nameCard"); // "art" | "nameCard"
 
   /* form */
   const [name, setName] = useState(""); // Purchaser name (order label, internal only)
@@ -544,6 +590,8 @@ export default function Page() {
                 gap: 4,
               }}
             >
+              {/* Hide Art scene button */}
+              {/*
               <button
                 type="button"
                 onClick={() => {
@@ -569,6 +617,8 @@ export default function Page() {
               >
                 Art scene
               </button>
+              */}
+                {/* leave the Name card button EXACTLY as it is below */}
               <button
                 type="button"
                 onClick={() => {

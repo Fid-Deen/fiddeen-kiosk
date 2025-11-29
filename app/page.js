@@ -44,6 +44,7 @@ const FONT_COLORS = [
   { value: "white", label: "White" },
   { value: "silver", label: "Silver" },
   { value: "gold", label: "Gold" },
+  { value: "black", label: "Black" }, // NEW
 ];
 
 /**
@@ -242,9 +243,15 @@ async function renderNameCardToDataUrl(arabicName, fontColor, langConfig) {
   canvas.height = canvasSize;
   const ctx = canvas.getContext("2d");
 
-  // BG
-  ctx.fillStyle = "#000000";
+  // Background + text logic
+  const isBlackText = fontColor?.toLowerCase() === "black";
+
+  const bgColor = isBlackText ? "#FFFFFF" : "#000000";  // white bg if black text
+  const textColor = isBlackText ? "#000000" : getFontColorHex(fontColor); // black text on white bg
+
+  ctx.fillStyle = bgColor;
   ctx.fillRect(0, 0, canvasSize, canvasSize);
+
 
   // TEXT ALIGNMENT
   ctx.textAlign = "center";
@@ -264,7 +271,7 @@ async function renderNameCardToDataUrl(arabicName, fontColor, langConfig) {
 
   // ==== FIND CONSISTENT FONT SIZE ====
   // Try a large size, shrink until BOTH width and height fit.
-  let fontSize = 520;
+  let fontSize = 800;
   const minFont = 120;
 
   while (fontSize > minFont) {
@@ -288,13 +295,13 @@ async function renderNameCardToDataUrl(arabicName, fontColor, langConfig) {
   const totalHeight = lines.length * fontSize * 1.25;
   let startY = (canvasSize - totalHeight) / 2 + fontSize / 2;
 
-  ctx.lineWidth = Math.max(fontSize * 0.06, 6); // auto outline thickness
+  ctx.lineWidth = Math.max(fontSize * 0.01, 1); // auto outline thickness
 
   for (const line of lines) {
     ctx.font = `400 ${fontSize}px "${fontFamily}"`;
     ctx.strokeStyle = outlineColor;
     ctx.strokeText(line, canvasSize / 2, startY);
-    ctx.fillStyle = fillColor;
+    ctx.fillStyle = textColor;
     ctx.fillText(line, canvasSize / 2, startY);
 
     startY += fontSize * 1.25; // move down for next line

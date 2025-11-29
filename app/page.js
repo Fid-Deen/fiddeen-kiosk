@@ -568,11 +568,10 @@ export default function Page() {
       <div style={shell}>
         <header style={{ marginBottom: 18 }}>
           <h1 style={{ fontSize: 36, fontWeight: 800, margin: 0 }}>
-            Fid Deen Custom Tote Generator
+           Fid Deen Custom Calligraphy Studio
           </h1>
           <p style={{ marginTop: 8, color: "#4a5568" }}>
-            Choose your design type, generate a preview, and save the final tote
-            art.
+          Create Your Personalized Tote Bag Name Design With Precision And Elegance.
           </p>
         </header>
 
@@ -991,7 +990,7 @@ export default function Page() {
                 disabled={!canChoose}
                 style={primaryBtn(canChoose)}
               >
-                {isChoosing ? "Saving…" : "Confirm & upload to S3"}
+                {isChoosing ? "Saving…" : "Approve & Upload"}
               </button>
               {chosenIndex !== null && (
                 <div style={{ fontSize: 14, color: "#6b7280" }}>

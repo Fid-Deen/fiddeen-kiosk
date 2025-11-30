@@ -596,8 +596,7 @@ export default function Page() {
                 gap: 4,
               }}
             >
-              {/* Hide Art scene button */}
-              {/*
+              
               <button
                 type="button"
                 onClick={() => {
@@ -623,7 +622,7 @@ export default function Page() {
               >
                 Art scene
               </button>
-              */}
+               
                 {/* leave the Name card button EXACTLY as it is below */}
               <button
                 type="button"

@@ -1,4 +1,4 @@
-// app/api/generate/s3Uploads.js
+// app/api/generate/s3Uploads.js 
 
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { DynamoDBClient, PutItemCommand } from "@aws-sdk/client-dynamodb";
@@ -50,11 +50,15 @@ async function emailRenderNotification(s3Url, meta = {}) {
   let subject = `New Fid Deen tote design for ${name}`;
   if (designType === "upload") {
     subject = `New Fid Deen uploaded design for ${name}`;
+  } else if (designType === "smart") {
+    subject = `New Fid Deen smart mode AI design for ${name}`;
   }
 
   const headerLine =
     designType === "upload"
       ? "A customer has UPLOADED their own tote design and it has been saved to S3."
+      : designType === "smart"
+      ? "A new SMART MODE AI tote design has been generated and uploaded to S3."
       : "A new tote design has been generated and uploaded to S3.";
 
   const lines = [
@@ -208,6 +212,7 @@ export default async function uploadToS3(fileBuffer, key, meta = {}) {
         Item,
       })
     );
+
     console.log("✅ Logged render to DynamoDB");
   } catch (err) {
     console.error("❌ DynamoDB logging failed:", err);

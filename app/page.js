@@ -161,6 +161,12 @@ const inputBase = {
   outline: "none",
 };
 
+const textAreaStyle = {
+  ...inputBase,
+  minHeight: 120,
+  resize: "vertical",
+};
+
 const selectStyle = {
   ...inputBase,
   appearance: "none",
@@ -313,7 +319,7 @@ async function renderNameCardToDataUrl(arabicName, fontColor, langConfig) {
 
 export default function Page() {
   /* design mode */
-  const [designType, setDesignType] = useState("nameCard"); // "art" | "nameCard" | "upload"
+  const [designType, setDesignType] = useState("nameCard"); // "art" | "nameCard" | "upload" | "smart"
 
   /* form */
   const [name, setName] = useState(""); // Purchaser name (order label, internal only)
@@ -326,6 +332,7 @@ export default function Page() {
   const [bagColor, setBagColor] = useState("beige");
   const [bagType, setBagType] = useState("regular");
   const [fontColor, setFontColor] = useState("white");
+  const [smartPrompt, setSmartPrompt] = useState("");
 
   /* generation */
   const [isGenerating, setIsGenerating] = useState(false);
@@ -359,8 +366,11 @@ export default function Page() {
     if (designType === "upload") {
       return name.trim().length > 0;
     }
+    if (designType === "smart") {
+      return name.trim().length > 0 && smartPrompt.trim().length > 0;
+    }
     return false;
-  }, [designType, name, timeOfDay, arabicName]);
+  }, [designType, name, timeOfDay, arabicName, smartPrompt]);
 
   const canGenerate = useMemo(
     () =>
@@ -405,6 +415,7 @@ export default function Page() {
     setS3Url("");
     setJobId("");
     setUploadWarning("");
+    setSmartPrompt("");
   }, []);
 
   /* ---------- transliteration effect ---------- */
@@ -595,11 +606,18 @@ export default function Page() {
 
     if (!canGenerate) {
       if (!hasRequired) {
-        setGenerateError(
-          designType === "art"
-            ? "Please fill Name and Time of Day before generating."
-            : "Please fill both Purchaser Name and Name For Print (Preview) before generating."
-        );
+        let msg =
+          "Please fill the required fields before generating.";
+        if (designType === "art") {
+          msg = "Please fill Name and Time of Day before generating.";
+        } else if (designType === "nameCard") {
+          msg =
+            "Please fill both Purchaser Name and Name For Print (Preview) before generating.";
+        } else if (designType === "smart") {
+          msg =
+            "Please fill Purchaser Name and describe your dream tote design before generating.";
+        }
+        setGenerateError(msg);
       }
       return;
     }
@@ -618,6 +636,35 @@ export default function Page() {
           throw new Error("Could not render name card image.");
         }
         setPreviews([dataUrl]);
+        setChosenIndex(0);
+      } else if (designType === "smart") {
+        const payload = {
+          name: name.trim(),
+          designType: "smart",
+          prompt: smartPrompt.trim(),
+          bagType,
+          bagColor,
+          previewCount: 1,
+          deferUpload: true,
+        };
+
+        const res = await fetch("/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error(txt || "Failed to generate design");
+        }
+
+        const data = await res.json();
+        if (!data?.images?.length) {
+          throw new Error("No image returned");
+        }
+
+        setPreviews(data.images);
         setChosenIndex(0);
       } else {
         const payload = {
@@ -693,7 +740,11 @@ export default function Page() {
         timeOfDay: designType === "art" ? timeOfDay || undefined : undefined,
         bagColor: designType === "upload" ? "" : bagColor,
         bagType:
-          designType === "art" || designType === "upload" ? bagType : undefined,
+          designType === "art" ||
+          designType === "upload" ||
+          designType === "smart"
+            ? bagType
+            : undefined,
         fontColor: designType === "nameCard" ? fontColor : undefined,
       };
 
@@ -839,6 +890,34 @@ export default function Page() {
               >
                 Upload your own design
               </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setDesignType("smart");
+                  setPreviews([]);
+                  setS3Url("");
+                  setChosenIndex(null);
+                  setGenerateError("");
+                  setUploadWarning("");
+                }}
+                style={{
+                  border: "none",
+                  borderRadius: 999,
+                  padding: "6px 14px",
+                  fontSize: 14,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  background:
+                    designType === "smart" ? "#fff" : "transparent",
+                  boxShadow:
+                    designType === "smart"
+                      ? "0 1px 4px rgba(15,23,42,0.18)"
+                      : "none",
+                }}
+              >
+                Smart mode (AI)
+              </button>
             </div>
           </div>
 
@@ -926,6 +1005,42 @@ export default function Page() {
             </>
           )}
 
+          {/* Smart mode fields */}
+          {designType === "smart" && (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr",
+                gap: 16,
+                marginBottom: 14,
+              }}
+            >
+              <div>
+                <label style={labelStyle}>
+                  Purchaser Name (Order Label) {reqBadge}
+                </label>
+                <input
+                  style={inputBase}
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g., Bilal"
+                />
+              </div>
+
+              <div>
+                <label style={labelStyle}>
+                  Describe your design idea {reqBadge}
+                </label>
+                <textarea
+                  style={textAreaStyle}
+                  value={smartPrompt}
+                  onChange={(e) => setSmartPrompt(e.target.value)}
+                  placeholder="Describe your dream tote design…"
+                />
+              </div>
+            </div>
+          )}
+
           {/* Name card fields – reordered as you requested */}
           {designType === "nameCard" && (
             <div
@@ -979,7 +1094,9 @@ export default function Page() {
                 </div>
 
                 <div style={{ marginTop: 10 }}>
-                  <label style={labelStyle}>Preferred Script / Language</label>
+                  <label style={labelStyle}>
+                    Preferred Script / Language
+                  </label>
                   <select
                     style={selectStyle}
                     value={preferredScript}
@@ -1091,8 +1208,8 @@ export default function Page() {
                       color: "#6b7280",
                     }}
                   >
-                    Upload a square design if possible. Non-square images will be
-                    cropped to a centered square automatically.
+                    Upload a square design if possible. Non-square images will
+                    be cropped to a centered square automatically.
                   </p>
                   {uploadWarning && (
                     <div
@@ -1124,7 +1241,7 @@ export default function Page() {
             }}
           >
             <div>
-              {designType === "art" ? (
+              {designType === "art" || designType === "smart" ? (
                 <>
                   <label style={labelStyle}>Tote Bag Type</label>
                   <select
@@ -1158,7 +1275,9 @@ export default function Page() {
                   ? "Generating…"
                   : designType === "art"
                   ? "Generate 3 Options"
-                  : "Generate Name Card"}
+                  : designType === "nameCard"
+                  ? "Generate Name Card"
+                  : "Generate Design"}
               </button>
             )}
             <button type="button" onClick={resetAll} style={secondaryBtn}>
@@ -1199,14 +1318,18 @@ export default function Page() {
                   ? "Pick your favorite"
                   : designType === "nameCard"
                   ? "Preview name card"
-                  : "Preview uploaded design"}
+                  : designType === "upload"
+                  ? "Preview uploaded design"
+                  : "Preview smart design"}
               </h2>
               <div style={{ color: "#6b7280", fontSize: 14 }}>
                 {designType === "art"
                   ? "Click a card to select"
                   : designType === "nameCard"
                   ? "Confirm this name card"
-                  : "Confirm this uploaded design"}
+                  : designType === "upload"
+                  ? "Confirm this uploaded design"
+                  : "Confirm this generated design"}
               </div>
             </div>
 
@@ -1247,7 +1370,9 @@ export default function Page() {
                           ? `Generated tote design ${i + 1}`
                           : designType === "nameCard"
                           ? "Generated name card"
-                          : "Uploaded design preview"
+                          : designType === "upload"
+                          ? "Uploaded design preview"
+                          : "Generated smart design"
                       }
                       style={{
                         width: "100%",

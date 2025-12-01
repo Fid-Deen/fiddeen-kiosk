@@ -1,14 +1,14 @@
-/* ---------------------------------------------------------
-  app/api/generate/route.js
-
-  Art scene + (legacy) name card generation for Fid Deen
-
-  - Art scenes use Google Gemini image model (Nano Banana style)
-  - One coherent scene per image (no collages)
-  - Up to 3 distinct landmarks per country for previews
-  - Composition Type controls camera framing (wide / mid / close)
-  - IP rate limiting for art scenes
---------------------------------------------------------- */
+/* --------------------------------------------------------- 
+ app/api/generate/route.js 
+ 
+ Art scene + (legacy) name card generation for Fid Deen 
+ 
+ - Art scenes use Google Gemini image model (Nano Banana style) 
+ - One coherent scene per image (no collages) 
+ - Up to 3 distinct landmarks per country for previews 
+ - Composition Type controls camera framing (wide / mid / close) 
+ - IP rate limiting for art scenes and smart mode 
+--------------------------------------------------------- */ 
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,8 +23,8 @@ import {
   COMPOSITION_TYPES,
 } from "./constants.js";
 
-/* ---------------------------------------
-  ENV
+/* --------------------------------------- 
+ ENV 
 --------------------------------------- */
 
 const GEMINI_API_KEY = process.env.GOOGLE_GEMINI_API_KEY || "";
@@ -34,8 +34,8 @@ console.log(
   GEMINI_API_KEY ? "YES" : "NO"
 );
 
-/* ---------------------------------------
-  IP RATE LIMITING (art scenes ONLY)
+/* --------------------------------------- 
+ IP RATE LIMITING (art + smart) 
 --------------------------------------- */
 
 const ipStore = new Map();
@@ -68,8 +68,8 @@ function checkRateLimit(ip) {
   return true;
 }
 
-/* ---------------------------------------
-  HELPERS
+/* --------------------------------------- 
+ HELPERS 
 --------------------------------------- */
 
 function safeTrim(val) {
@@ -172,8 +172,48 @@ function buildNameCardPrompt(arabicName) {
   ].join(" ");
 }
 
-/* ---------------------------------------
-  GEMINI IMAGE GENERATION (Nano Banana)
+/**
+ * Build Smart Mode prompt:
+ * Freeform user idea wrapped in strong brand-safe, print-safe constraints.
+ */
+function buildSmartModePrompt({ userPrompt, name, bagType, bagColor }) {
+  const cleanUser = safeTrim(userPrompt);
+  const nameSnippet = safeTrim(name)
+    ? `The design is for a tote bag ordered by someone named "${safeTrim(
+        name
+      )}".`
+    : "";
+
+  const bagBits = [];
+  if (safeTrim(bagType)) {
+    bagBits.push(`Tote bag type: ${safeTrim(bagType)}.`);
+  }
+  if (safeTrim(bagColor)) {
+    bagBits.push(`Tote bag fabric color: ${safeTrim(bagColor)}.`);
+  }
+
+  const safetyRules = [
+    "The artwork must be a single, cohesive illustration filling a 1:1 square canvas edge to edge.",
+    "Do NOT include any people, faces, characters, animals, or body parts.",
+    "Do NOT include any logos, trademarks, or recognizable brand identities.",
+    "Do NOT include any readable text, letters, or numbers in any language.",
+    "Avoid busy, cluttered compositions or tiny details that will not print cleanly.",
+    "Design must be clean, graphic, and print-safe for high quality tote bag printing.",
+  ];
+
+  const parts = [
+    `Create a high-end tote bag artwork based on this idea: ${cleanUser}.`,
+    nameSnippet,
+    bagBits.join(" "),
+    BASE_STYLE,
+    safetyRules.join(" "),
+  ].filter(Boolean);
+
+  return parts.join(" ");
+}
+
+/* --------------------------------------- 
+ GEMINI IMAGE GENERATION (Nano Banana) 
 --------------------------------------- */
 
 /**
@@ -187,8 +227,6 @@ async function generateWithGemini(prompt) {
 
   const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
   const modelName = "gemini-2.5-flash-image";
-
-
 
   const response = await ai.models.generateContent({
     model: modelName,
@@ -211,8 +249,8 @@ async function generateWithGemini(prompt) {
   throw new Error("Gemini returned no image parts");
 }
 
-/* ---------------------------------------
-  ROUTE HANDLER
+/* --------------------------------------- 
+ ROUTE HANDLER 
 --------------------------------------- */
 
 export async function POST(req) {
@@ -226,7 +264,12 @@ export async function POST(req) {
     );
   }
 
-  const designType = body?.designType === "nameCard" ? "nameCard" : "art";
+  let designType = "art";
+  if (body?.designType === "nameCard") {
+    designType = "nameCard";
+  } else if (body?.designType === "smart") {
+    designType = "smart";
+  }
 
   // How many previews we try to produce for art scenes
   const previewCount =
@@ -253,6 +296,49 @@ export async function POST(req) {
 
       const prompt = buildNameCardPrompt(arabicName);
       const img = await generateWithGemini(prompt);
+
+      return NextResponse.json({
+        images: [img],
+        provider: "gemini",
+      });
+    }
+
+    /* ---------------------------------------
+       SMART MODE – freeform user prompt
+       Shares the same IP rate limiting as art scenes.
+    --------------------------------------- */
+    if (designType === "smart") {
+      const ip = extractIP(req);
+      if (!checkRateLimit(ip)) {
+        return NextResponse.json(
+          {
+            error:
+              "Too many generations from this IP. Please wait and try again.",
+          },
+          { status: 429 }
+        );
+      }
+
+      const promptText = safeTrim(body?.prompt);
+      if (!promptText) {
+        return NextResponse.json(
+          { error: "Prompt is required for smart designs." },
+          { status: 400 }
+        );
+      }
+
+      const name = safeTrim(body?.name);
+      const bagType = safeTrim(body?.bagType);
+      const bagColor = safeTrim(body?.bagColor);
+
+      const finalPrompt = buildSmartModePrompt({
+        userPrompt: promptText,
+        name,
+        bagType,
+        bagColor,
+      });
+
+      const img = await generateWithGemini(finalPrompt);
 
       return NextResponse.json({
         images: [img],

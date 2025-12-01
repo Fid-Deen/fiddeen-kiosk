@@ -44,13 +44,24 @@ async function emailRenderNotification(s3Url, meta = {}) {
     country = "",
     bagColor = "",
     bagType = "",
+    designType = "",
   } = meta;
 
-  const subject = `New Fid Deen tote design for ${name}`;
+  let subject = `New Fid Deen tote design for ${name}`;
+  if (designType === "upload") {
+    subject = `New Fid Deen uploaded design for ${name}`;
+  }
+
+  const headerLine =
+    designType === "upload"
+      ? "A customer has UPLOADED their own tote design and it has been saved to S3."
+      : "A new tote design has been generated and uploaded to S3.";
+
   const lines = [
-    `A new tote design has been generated and uploaded to S3.`,
+    headerLine,
     "",
     `Name:        ${name}`,
+    designType ? `Design type: ${designType}` : "",
     country ? `Country:     ${country}` : "",
     theme ? `Theme:       ${theme}` : "",
     timeOfDay ? `Time of day: ${timeOfDay}` : "",
@@ -97,6 +108,7 @@ export default async function uploadToS3(fileBuffer, key, meta = {}) {
     bagColor = "",
     app = "fiddeen",
     kind = "render",
+    designType = "art",
   } = meta;
 
   const tagPairs = [
@@ -108,6 +120,7 @@ export default async function uploadToS3(fileBuffer, key, meta = {}) {
     ["country", country],
     ["color", color],
     ["lang", lang],
+    ["designType", designType],
   ]
     .filter(([_, v]) => String(v || "").trim().length > 0)
     .map(([k, v]) => encodeKV(k, tagSafe(v)));
@@ -129,6 +142,7 @@ export default async function uploadToS3(fileBuffer, key, meta = {}) {
     jobId: String(jobId || ""),
     chosenIndex: String(chosenIndex ?? 0),
     createdAt: new Date().toISOString(),
+    designType: String(designType || ""),
   };
   if (email) Metadata.email = String(email);
 
@@ -181,6 +195,9 @@ export default async function uploadToS3(fileBuffer, key, meta = {}) {
     if (String(bagType || "").trim() !== "") {
       Item.bag_type = { S: String(bagType) };
     }
+    if (String(designType || "").trim() !== "") {
+      Item.design_type = { S: String(designType) };
+    }
     if (email) {
       Item.email = { S: String(email) };
     }
@@ -204,6 +221,7 @@ export default async function uploadToS3(fileBuffer, key, meta = {}) {
       country,
       bagColor,
       bagType,
+      designType,
     });
     console.log("✅ Email notification sent");
   } catch (err) {

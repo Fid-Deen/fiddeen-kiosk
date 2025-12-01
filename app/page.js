@@ -5,10 +5,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 /* ---------- Options ---------- */
 
 const THEMES = [
-  { value: "peaceful", label: "Peaceful" },
-  { value: "islamic", label: "Islamic" },
-  { value: "nature", label: "Nature" },
-  { value: "city_vibrant", label: "City / Vibrant" },
+  { value: "wide", label: "Wide Scene" },
+  { value: "mid", label: "Mid Scene" },
+  { value: "close", label: "Close-Up Scene" },
 ];
 
 const COUNTRIES = [
@@ -246,20 +245,20 @@ async function renderNameCardToDataUrl(arabicName, fontColor, langConfig) {
   // Background + text logic
   const isBlackText = fontColor?.toLowerCase() === "black";
 
-  const bgColor = isBlackText ? "#FFFFFF" : "#000000";  // white bg if black text
+  const bgColor = isBlackText ? "#FFFFFF" : "#000000"; // white bg if black text
   const textColor = isBlackText ? "#000000" : getFontColorHex(fontColor); // black text on white bg
 
   ctx.fillStyle = bgColor;
   ctx.fillRect(0, 0, canvasSize, canvasSize);
 
-
   // TEXT ALIGNMENT
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  try { ctx.direction = direction; } catch {}
+  try {
+    ctx.direction = direction;
+  } catch {}
 
   // OUTLINE + FILL COLORS
-  const fillColor = getFontColorHex(fontColor);
   const outlineColor = "#000000"; // Cricut-safe outline
 
   // LOAD FONT LARGE FOR MEASUREMENT
@@ -278,7 +277,7 @@ async function renderNameCardToDataUrl(arabicName, fontColor, langConfig) {
     ctx.font = `400 ${fontSize}px "${fontFamily}"`;
 
     // Measure each line width
-    const widths = lines.map(line => ctx.measureText(line).width);
+    const widths = lines.map((line) => ctx.measureText(line).width);
     const maxLineWidth = Math.max(...widths);
 
     // Compute total height
@@ -310,12 +309,11 @@ async function renderNameCardToDataUrl(arabicName, fontColor, langConfig) {
   return canvas.toDataURL("image/png");
 }
 
-
 /* ---------- Page ---------- */
 
 export default function Page() {
   /* design mode */
-  const [designType, setDesignType] = useState("nameCard"); // "art" | "nameCard"
+  const [designType, setDesignType] = useState("nameCard"); // "art" | "nameCard" | "upload"
 
   /* form */
   const [name, setName] = useState(""); // Purchaser name (order label, internal only)
@@ -342,6 +340,9 @@ export default function Page() {
   const [isTransliterating, setIsTransliterating] = useState(false);
   const [previewTouched, setPreviewTouched] = useState(false);
 
+  /* upload mode state */
+  const [uploadWarning, setUploadWarning] = useState("");
+
   const selectedLanguageConfig = useMemo(
     () => LANGUAGE_CONFIG[preferredScript] || LANGUAGE_CONFIG.arabic,
     [preferredScript]
@@ -352,7 +353,13 @@ export default function Page() {
     if (designType === "art") {
       return name.trim().length > 0 && !!timeOfDay;
     }
-    return name.trim().length > 0 && arabicName.trim().length > 0;
+    if (designType === "nameCard") {
+      return name.trim().length > 0 && arabicName.trim().length > 0;
+    }
+    if (designType === "upload") {
+      return name.trim().length > 0;
+    }
+    return false;
   }, [designType, name, timeOfDay, arabicName]);
 
   const canGenerate = useMemo(
@@ -365,15 +372,29 @@ export default function Page() {
     [hasRequired, isGenerating, isChoosing, previews.length, s3Url]
   );
 
-  const canChoose = useMemo(
-    () =>
-      previews.length > 0 &&
-      chosenIndex !== null &&
-      !isChoosing &&
-      !s3Url &&
-      !isGenerating,
-    [previews.length, chosenIndex, isChoosing, s3Url, isGenerating]
-  );
+  const canChoose = useMemo(() => {
+    if (
+      previews.length === 0 ||
+      chosenIndex === null ||
+      isChoosing ||
+      s3Url ||
+      isGenerating
+    ) {
+      return false;
+    }
+    if (designType === "upload") {
+      return name.trim().length > 0;
+    }
+    return true;
+  }, [
+    previews.length,
+    chosenIndex,
+    isChoosing,
+    s3Url,
+    isGenerating,
+    designType,
+    name,
+  ]);
 
   const resetAll = useCallback(() => {
     setIsGenerating(false);
@@ -383,6 +404,7 @@ export default function Page() {
     setChosenIndex(null);
     setS3Url("");
     setJobId("");
+    setUploadWarning("");
   }, []);
 
   /* ---------- transliteration effect ---------- */
@@ -444,8 +466,132 @@ export default function Page() {
 
   /* ---------- handlers ---------- */
 
+  // Crop a small outer margin from a square PNG data URL so the art fills the frame
+  async function cropOuterMargin(dataUrl, percent = 0.05) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const w = img.width;
+        const h = img.height;
+        const crop = Math.floor(Math.min(w, h) * percent); // 5% border
+
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+
+        // draw inner region (cropped) back to full canvas
+        ctx.drawImage(
+          img,
+          crop, // sx
+          crop, // sy
+          w - 2 * crop, // sWidth
+          h - 2 * crop, // sHeight
+          0,
+          0,
+          w,
+          h
+        );
+
+        resolve(canvas.toDataURL("image/png"));
+      };
+      img.onerror = reject;
+      img.src = dataUrl;
+    });
+  }
+
+  // Handle file selection in "upload" mode
+  function handleUploadFile(e) {
+    const file = e.target.files && e.target.files[0];
+
+    setUploadWarning("");
+    setGenerateError("");
+    setPreviews([]);
+    setChosenIndex(null);
+    setS3Url("");
+
+    if (!file) {
+      return;
+    }
+
+    if (!/^image\/(png|jpe?g)$/i.test(file.type)) {
+      setUploadWarning("Please upload a PNG or JPEG image.");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onerror = () => {
+      setUploadWarning("Could not read image file. Please try another file.");
+    };
+    reader.onload = (event) => {
+      const result = event.target && event.target.result;
+      if (!result || typeof result !== "string") {
+        setUploadWarning("Could not read image file. Please try another file.");
+        return;
+      }
+
+      const img = new Image();
+      img.onerror = () => {
+        setUploadWarning("Could not load image. Please try another file.");
+      };
+      img.onload = () => {
+        const width = img.width;
+        const height = img.height;
+
+        const warningParts = [];
+
+        if (width < 1000 || height < 1000) {
+          warningParts.push(
+            "Warning: This image may appear blurry when printed. We recommend at least 1024×1024."
+          );
+        }
+
+        let finalDataUrl = result;
+
+        if (width !== height) {
+          warningParts.push(
+            "Please upload a square design (same width and height), or we’ll crop it to a centered square automatically."
+          );
+          const squareSize = Math.min(width, height);
+          const offsetX = (width - squareSize) / 2;
+          const offsetY = (height - squareSize) / 2;
+
+          const canvas = document.createElement("canvas");
+          canvas.width = squareSize;
+          canvas.height = squareSize;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(
+            img,
+            offsetX,
+            offsetY,
+            squareSize,
+            squareSize,
+            0,
+            0,
+            squareSize,
+            squareSize
+          );
+          finalDataUrl = canvas.toDataURL("image/png");
+        }
+
+        setPreviews([finalDataUrl]);
+        setChosenIndex(0);
+        setUploadWarning(warningParts.join(" "));
+      };
+
+      img.src = result;
+    };
+
+    reader.readAsDataURL(file);
+  }
+
   async function handleGenerate(e) {
     e.preventDefault();
+
+    if (designType === "upload") {
+      setGenerateError("");
+      return;
+    }
 
     if (!canGenerate) {
       if (!hasRequired) {
@@ -478,7 +624,8 @@ export default function Page() {
           name: name.trim(),
           designType,
           country: country || undefined,
-          theme: theme || undefined,
+          composition: theme || undefined, // explicit composition key
+          theme: theme || undefined, // keep for compatibility
           timeOfDay,
           bagColor,
           bagType,
@@ -502,7 +649,11 @@ export default function Page() {
           throw new Error("No previews returned");
         }
 
-        setPreviews(data.images);
+        const processedImages = await Promise.all(
+          data.images.map((img) => cropOuterMargin(img, 0.05)) // 5% border
+        );
+
+        setPreviews(processedImages);
         setChosenIndex(0);
       }
     } catch (err) {
@@ -519,31 +670,39 @@ export default function Page() {
   async function handleChoose() {
     if (!canChoose) return;
 
+    if (designType === "upload" && !name.trim()) {
+      setGenerateError("Please fill Purchaser Name before approving.");
+      return;
+    }
+
     setIsChoosing(true);
     setGenerateError("");
 
     try {
       const imageDataUrl = previews[chosenIndex];
 
+      const meta = {
+        name: name.trim(),
+        designType,
+        arabicName:
+          designType === "nameCard"
+            ? arabicName.trim() || undefined
+            : undefined,
+        country: designType === "art" ? country || undefined : undefined,
+        theme: designType === "art" ? theme || undefined : undefined,
+        timeOfDay: designType === "art" ? timeOfDay || undefined : undefined,
+        bagColor: designType === "upload" ? "" : bagColor,
+        bagType:
+          designType === "art" || designType === "upload" ? bagType : undefined,
+        fontColor: designType === "nameCard" ? fontColor : undefined,
+      };
+
       const res = await fetch("/api/generate/choose", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           imageDataUrl,
-          meta: {
-            name: name.trim(),
-            arabicName:
-              designType === "nameCard"
-                ? arabicName.trim() || undefined
-                : undefined,
-            designType,
-            country: designType === "art" ? country : undefined,
-            theme: designType === "art" ? theme : undefined,
-            timeOfDay: designType === "art" ? timeOfDay : undefined,
-            bagColor,
-            bagType: designType === "art" ? bagType : undefined,
-            fontColor: designType === "nameCard" ? fontColor : undefined,
-          },
+          meta,
         }),
       });
 
@@ -575,10 +734,11 @@ export default function Page() {
       <div style={shell}>
         <header style={{ marginBottom: 18 }}>
           <h1 style={{ fontSize: 36, fontWeight: 800, margin: 0 }}>
-           Fid Deen Custom Calligraphy Studio
+            Fid Deen Custom Calligraphy Studio
           </h1>
           <p style={{ marginTop: 8, color: "#4a5568" }}>
-          Create Your Personalized Tote Bag Name Design With Precision And Elegance.
+            Create Your Personalized Tote Bag Name Design With Precision And
+            Elegance.
           </p>
         </header>
 
@@ -596,7 +756,6 @@ export default function Page() {
                 gap: 4,
               }}
             >
-              
               <button
                 type="button"
                 onClick={() => {
@@ -605,6 +764,7 @@ export default function Page() {
                   setS3Url("");
                   setChosenIndex(null);
                   setGenerateError("");
+                  setUploadWarning("");
                 }}
                 style={{
                   border: "none",
@@ -622,8 +782,8 @@ export default function Page() {
               >
                 Art scene
               </button>
-               
-                {/* leave the Name card button EXACTLY as it is below */}
+
+              {/* leave the Name card button EXACTLY as it is below */}
               <button
                 type="button"
                 onClick={() => {
@@ -632,6 +792,7 @@ export default function Page() {
                   setS3Url("");
                   setChosenIndex(null);
                   setGenerateError("");
+                  setUploadWarning("");
                 }}
                 style={{
                   border: "none",
@@ -649,6 +810,34 @@ export default function Page() {
                 }}
               >
                 Name card
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setDesignType("upload");
+                  setPreviews([]);
+                  setS3Url("");
+                  setChosenIndex(null);
+                  setGenerateError("");
+                  setUploadWarning("");
+                }}
+                style={{
+                  border: "none",
+                  borderRadius: 999,
+                  padding: "6px 14px",
+                  fontSize: 14,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  background:
+                    designType === "upload" ? "#fff" : "transparent",
+                  boxShadow:
+                    designType === "upload"
+                      ? "0 1px 4px rgba(15,23,42,0.18)"
+                      : "none",
+                }}
+              >
+                Upload your own design
               </button>
             </div>
           </div>
@@ -692,13 +881,13 @@ export default function Page() {
                 </div>
 
                 <div>
-                  <label style={labelStyle}>Theme</label>
+                  <label style={labelStyle}>Composition Type</label>
                   <select
                     style={selectStyle}
                     value={theme}
                     onChange={(e) => setTheme(e.target.value)}
                   >
-                    <option value="">— Select a theme —</option>
+                    <option value="">— Select a Composition —</option>
                     {THEMES.map((t) => (
                       <option key={t.value} value={t.value}>
                         {t.label}
@@ -837,6 +1026,94 @@ export default function Page() {
             </div>
           )}
 
+          {/* Upload-your-own-design fields */}
+          {designType === "upload" && (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1.1fr 1.2fr",
+                gap: 16,
+                marginBottom: 14,
+              }}
+            >
+              <div>
+                <label style={labelStyle}>
+                  Purchaser Name (Order Label) {reqBadge}
+                </label>
+                <input
+                  style={inputBase}
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g., Bilal"
+                />
+
+                <div style={{ marginTop: 10 }}>
+                  <label style={labelStyle}>Tote Bag Type</label>
+                  <select
+                    style={selectStyle}
+                    value={bagType}
+                    onChange={(e) => setBagType(e.target.value)}
+                  >
+                    {BAG_TYPES.map((b) => (
+                      <option key={b.value} value={b.value}>
+                        {b.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label style={labelStyle}>
+                  Upload Your Design (PNG or JPEG)
+                </label>
+                <div
+                  style={{
+                    border: "1px dashed #cbd5e1",
+                    borderRadius: 16,
+                    padding: 16,
+                    background: "#f9fafb",
+                  }}
+                >
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/jpg"
+                    onChange={handleUploadFile}
+                    style={{
+                      fontSize: 14,
+                      width: "100%",
+                    }}
+                  />
+                  <p
+                    style={{
+                      marginTop: 8,
+                      fontSize: 12,
+                      color: "#6b7280",
+                    }}
+                  >
+                    Upload a square design if possible. Non-square images will be
+                    cropped to a centered square automatically.
+                  </p>
+                  {uploadWarning && (
+                    <div
+                      style={{
+                        marginTop: 6,
+                        fontSize: 12,
+                        color: "#b45309",
+                        background: "#fffbeb",
+                        border: "1px solid #fed7aa",
+                        borderRadius: 8,
+                        padding: "6px 8px",
+                      }}
+                    >
+                      {uploadWarning}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Bag options row */}
           <div
             style={{
@@ -846,8 +1123,6 @@ export default function Page() {
               marginBottom: 10,
             }}
           >
-            
-
             <div>
               {designType === "art" ? (
                 <>
@@ -865,7 +1140,7 @@ export default function Page() {
                   </select>
                 </>
               ) : (
-                // In nameCard mode we no longer show anything here;
+                // In nameCard and upload modes we no longer show anything here;
                 // we left this column empty to avoid changing the broader layout.
                 <div />
               )}
@@ -873,22 +1148,20 @@ export default function Page() {
           </div>
 
           <div style={{ display: "flex", gap: 12, marginTop: 10 }}>
-            <button
-              type="submit"
-              style={primaryBtn(canGenerate)}
-              disabled={!canGenerate}
-            >
-              {isGenerating
-                ? "Generating…"
-                : designType === "art"
-                ? "Generate 3 Options"
-                : "Generate Name Card"}
-            </button>
-            <button
-              type="button"
-              onClick={resetAll}
-              style={secondaryBtn}
-            >
+            {designType !== "upload" && (
+              <button
+                type="submit"
+                style={primaryBtn(canGenerate)}
+                disabled={!canGenerate}
+              >
+                {isGenerating
+                  ? "Generating…"
+                  : designType === "art"
+                  ? "Generate 3 Options"
+                  : "Generate Name Card"}
+              </button>
+            )}
+            <button type="button" onClick={resetAll} style={secondaryBtn}>
               Reset
             </button>
           </div>
@@ -924,12 +1197,16 @@ export default function Page() {
               <h2 style={{ margin: 0, fontSize: 22 }}>
                 {designType === "art"
                   ? "Pick your favorite"
-                  : "Preview name card"}
+                  : designType === "nameCard"
+                  ? "Preview name card"
+                  : "Preview uploaded design"}
               </h2>
               <div style={{ color: "#6b7280", fontSize: 14 }}>
                 {designType === "art"
                   ? "Click a card to select"
-                  : "Confirm this name card"}
+                  : designType === "nameCard"
+                  ? "Confirm this name card"
+                  : "Confirm this uploaded design"}
               </div>
             </div>
 
@@ -968,7 +1245,9 @@ export default function Page() {
                       alt={
                         designType === "art"
                           ? `Generated tote design ${i + 1}`
-                          : "Generated name card"
+                          : designType === "nameCard"
+                          ? "Generated name card"
+                          : "Uploaded design preview"
                       }
                       style={{
                         width: "100%",

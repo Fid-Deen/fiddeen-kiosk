@@ -62,7 +62,10 @@ export async function POST(req) {
     const body = await req.json();
     const { imageDataUrl, meta = {} } = body || {};
     if (!imageDataUrl) {
-      return NextResponse.json({ error: "Missing imageDataUrl" }, { status: 400 });
+      return NextResponse.json(
+        { error: "Missing imageDataUrl" },
+        { status: 400 }
+      );
     }
 
     const {
@@ -81,6 +84,9 @@ export async function POST(req) {
       email = "",
       jobId = "",
       chosenIndex = 0,
+
+      // New: design type for distinguishing art / name card / upload
+      designType = "art",
     } = meta;
 
     // For current s3Uploads.js compatibility, map bagColor -> color
@@ -93,7 +99,8 @@ export async function POST(req) {
     const orderId = makeOrderId();
 
     // Upload to S3 (returns s3Url)
-    // s3Uploads.js currently only tags certain keys, but we pass everything in case we extend it.
+    // s3Uploads.js currently only tags certain keys, but we pass everything in case we
+    // extend it.
     const s3Url = await uploadToS3(buffer, key, {
       // existing fields s3Uploads.js expects
       name,
@@ -112,6 +119,7 @@ export async function POST(req) {
       bagColor,
       app: "fiddeen",
       kind: "render",
+      designType, // NEW: distinguish art / nameCard / upload downstream
     });
 
     if (!s3Url) {
